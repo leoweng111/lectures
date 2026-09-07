@@ -93,3 +93,20 @@ python lecture_01.py          # 重新生成 trace(一般不需要,var/traces �
 ```
 
 > 每周日对谈用同款 Prompt 开头,但把任务换成第 4 节的"总结 + 自测 + 更新缺口",并附上 `progress.md` 与本周 `lecture_XX.md` 列表。
+
+---
+
+## 7. edtrace 前端重建(换机器 / 误删 / 升级工具)
+
+`edtrace/` 是第三方工具([percyliang/edtrace](https://github.com/percyliang/edtrace)),**已去版本化**(本地无 .git),被外层仓库 .gitignore 忽略,不会也不应被 push。它损坏或想升级时,直接删除整个 `edtrace` 目录后按下面重建(约 1~2 分钟,node_modules 会重新安装):
+
+```bash
+cd D:\work_repo\lectures
+git clone --depth 1 https://github.com/percyliang/edtrace   # 重新拉取工具
+npm install --prefix edtrace/frontend                       # 安装前端依赖
+
+# 建立 var/images 目录联接(让 trace-viewer 能读取仓库根目录的讲义数据)
+node -e "const fs=require('fs'); for (const d of ['var','images']) fs.symlinkSync('D:/work_repo/lectures/'+d, 'edtrace/frontend/'+d, 'junction');"
+
+npm run --prefix=edtrace/frontend dev   # 启动,浏览器打开 http://localhost:<端口>/?trace=var/traces/lecture_XX.json
+```
