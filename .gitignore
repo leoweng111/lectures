@@ -6,3 +6,7 @@ node_modules
 .claude
 notes.otl
 rc
+
+# Local IDE settings
+.idea/
+
