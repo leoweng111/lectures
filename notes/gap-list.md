@@ -19,6 +19,12 @@
 - hyperparameter transfer / μP(宽度缩放下 LR/初始化如何迁移)。
   - 来源:Lecture 01 提出"predictability & transfer"思想,μP 论文是深入工具;属前沿内容,放学习后期。
   - 建议资源:Yang et al. 2203.03466 + microsoft/mup 仓库。
+- 浮点数的二进制表示与数值格式(规格化/下溢/分辨率)。
+  - 来源:Lecture 02 fp32/fp16/bf16/nvfp4 单元——不需要背 IEEE 全表,但"指数位定范围、尾数位定分辨率、bias/规格化/下溢"要会推。
+  - 建议资源:W"ikipedia fp16/bf16 词条 + NVIDIA fp8/nvfp4 primer;能徒手写一个小数的二进制分解即可。
+- Einstein 求和记号与 einops 实操。
+  - 来源:Lecture 02 einops 单元,Assignment 1/后续注意力实现大量使用。
+  - 建议资源:einops.rocks 教程 + 用 trace 里的张量把"旧写法"改写成 einops 对拍 allclose。
 
 ## C 放弃 / 降级
 
