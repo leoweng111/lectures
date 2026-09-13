@@ -119,6 +119,38 @@ tokenization methods、scale recipe等等
 SwiGLU主要讲的是啥？
   - 参考：https://zhuanlan.zhihu.com/p/650237644
   - AI: SwiGLU 是一种**门控激活函数**,把 FFN 里的「线性+ReLU/GeLU」换成了两个投影相乘、其中一个过 Swish 当门:$\mathrm{SwiGLU}(x) = \mathrm{Swish}(xW_1)\odot (xW_2)W_3$(忽略 bias;也可以理解为 FFN 增加了一条门控支路,参数略增但通常去掉 bias 抵消)。直觉:乘性门控让网络能按输入内容“决定传多少信号”,表达力强于逐元素的固定非线性。效果:Shazeer 2020(GLU variants, https://arxiv.org/abs/2002.05202)及后续 PaLM/LLaMA/Qwen 等实证,同参数量下比 ReLU/GeLU FFN 困惑度更低(常有 ~0.1 量级的 PPL 改善量级,随实现而异)。你会在架构单元/Assignment 1 里亲手实现它;讲义把它的出现归为「实验结果先于理论」(那张 divine-benevolence 图的梗)。
+  - AI(补充 2026-09-13)——严格回答你的问题:**位置上是“替换 FFN 里第一段『线性 + 激活』”,但内容上不是“包含原来的线性 + ReLU”,而是把它换成了“两个线性 + 逐元素门控乘”;第二段线性不变。**
+    - **公式对比**:
+      - 原版(以 ReLU 为例):$\mathrm{FFN_{ReLU}}(x)=\mathrm{ReLU}(xW_1)\,W_2$,$W_1\in\mathbb{R}^{d\times d_{ff}}$、$W_2\in\mathbb{R}^{d_{ff}\times d}$——第一段“线性 $xW_1$ + ReLU”,第二段线性 $W_2$;
+      - GLU 家族(Gated Linear Units，讲义 P22 的推导):把 $\mathrm{ReLU}(xW_1)$ 扩成 $\mathrm{act}(xW_1)\odot(xV)$——**多加一条线性支路 $V$**,与激活输出**逐元素相乘**;$\mathrm{act}=$ReLU→ReGLU、GeLU→GeGLU、**Swish→SwiGLU**;
+      - SwiGLU:$\mathrm{SwiGLU}(x)=\big(\mathrm{Swish}(xW_1)\odot xV\big)W_2$,其中 $\mathrm{Swish}(z)=z\,\sigma(z)$(而 $\sigma$ 就是 sigmoid,逐元素)。
+    - **三处差异(所以不是“包含 ReLU”)**:① 激活从 ReLU **换成 Swish**(ReLU 被换掉,不是保留);② **多了一条门控支路 $V$**(多一组参数与矩阵乘);③ 非线性形态从“逐元素固定非线性”变成“逐元素非线性 × 另一条线性输出”的**乘性调制**;但第二段 $W_2$ 位置与作用完全不变。
+    - **代码级对照**:
+      ```python
+      # 原版 FFN
+      h = F.relu(x @ W1)          # 第一段:线性 + ReLU
+      y = h @ W2                  # 第二段:线性
+
+      # SwiGLU FFN(F.silu 就是 Swish)
+      h = F.silu(x @ W1) * (x @ V)   # 两个线性 + 逐元素门控乘
+      y = h @ W2                  # 第二段不变
+      ```
+    - **参数量 / FLOPs 的“配平”(为什么要缩 $d_{ff}$)**:原版 2 个矩阵、SwiGLU 3 个矩阵,若 $d_{ff}$ 不变参数量会涨 50%。工程上把 $d_{ff}$ 编到 $\frac23\cdot4d=\frac83d\approx2.67d$:
+      - 参数:原版 $2d\,d_{ff}=8d^2$;SwiGLU $3d\!\cdot\!\frac83d=8d^2$ ✓ 相等;
+      - 每 token FLOPs:原版 $4d\,d_{ff}=16d^2$;SwiGLU $6d\!\cdot\!\frac83d=16d^2$ ✓ 相等。
+      - 这就是讲义 P23 “Gated models use smaller dimensions for the $d_{ff}$ by 2/3” 与 P38 表里 2.5~3.5 那些数字的来源(LLaMA-2 3.5、Qwen/DeepSeek 2.67 等)。
+    - **逐单元数值对比**(取余下一个 hidden 单元:$z=xW_1$ 的分量、$g=xV$ 的分量):
+
+      | $z$ | $g$ | ReLU: $\max(0,z)$ | $\mathrm{Swish}(z)$ | SwiGLU hidden: $\mathrm{Swish}(z)\cdot g$ |
+      |---|---|---|---|---|
+      | 2 | 3 | 2 | 1.762 | **5.29** |
+      | 2 | -3 | 2 | 1.762 | **-5.29** |
+      | -2 | 3 | 0 | -0.238 | **-0.71** |
+      | -2 | 0.5 | 0 | -0.238 | **-0.12** |
+
+      - ReLU 对负值一律截断为 0(硬门、方向固定);SwiGLU 里“传不传、传多少、什么符号”由**另一条支路 $g$ 决定**——同一个门值可以输出正或负,这就是“乘性门控的选择依赖输入内容”。
+    - **实现细节**:现代实现通常**去掉所有 bias**(原因:显存与优化稳定性,Lecture 03 P18);门控里的 Swish 也可换成 GeLU(GeGLU)/ReLU(ReGLU),Shazeer 2020 报告 SwiGLU/GeGLU 略优,后续工作基本印证(讲义 P24-26),因此 PaLM/LLaMA/Mistral/Qwen 等主流模型普遍采用 SwiGLU。
+    - **一句话总结**:位置上是替换 FFN 的“第一段线性 + 激活”;但不是“原线性 + ReLU 的包含式升级”,而是“线性 + Swish 门 × 第二条线性 → 逐元素乘,再走同一条第二段线性”,并用 $d_{ff}\to\frac83d$ 把参数量/FLOPs 配平到与原版相同。
 in-context learning是什么含义？
   - AI: in-context learning(ICL,上下文学习/情境学习)= **在推理时不更新任何参数,只把示例/任务说明写进 prompt 上下文,模型就能按示例执行新任务**。典型:few-shot——给 2~3 个 (输入→输出) 例子再丢新输入,GPT-3(175B)时代首次被系统观察到并命名(讲义把它标为 GPT-3 的标志性能力,区别于 BERT 时代「必须 fine-tune」)。本质仍有争议(它到底激活了哪些已学机制、是否等价于隐式梯度等),但对使用者它是「把模型当条件分布用」:p(输出 | 输入 + 示例)。和你的领域相关:排序/召回里拿 LLM 做零样本/少样本特征或 reranker 时,ICL 设计(示例选择、格式)直接影响效果。后续讲义会在 agents/长上下文里继续用这个概念。
 The dream: tokenizer-free model architectures, which operate directly on bytes: 这类的研究一般怎么做的
