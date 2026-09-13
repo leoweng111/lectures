@@ -7,11 +7,30 @@
 
 ## ① 卡住的地方(尽量带讲义小节号或视频时间戳)
 Example 1: fraction of FLOPs spent in attention versus MLP changes with scale. 
+![img_2.png](img_2.png)
 这里没有很明白想要表达什么。是否想要说：在小模型上做的比如attention的架构改进，在大模型上可能就不再适用，因为大模型的计算量主要消耗在MLP上，而不是attention上？
   - AI: 你的理解方向对,但这句话的落点是「**直觉不跨规模迁移**」,不只针对某个改进是否失效:它的作用是在第一讲论证——为什么我们不能只在小模型上做实验就把结论搬到大模型,以及为什么这门课把「资源账本(resource accounting)」放在核心位置。更具体地:每个 token 上,attention 的 FLOPs 量级约为 $O(L\cdot d)$(L=序列长度,d=隐藏维度,由 QK^T、AV 等矩阵乘得出),而 MLP 与 embedding 之外的参数部分约 $O(d^2)$;模型scale主要靠增大 $d$,所以 **MLP 占总 FLOPs 的比例随规模上升、attention 占比下降**(数十 B 以上、常见上下文下 attention 通常只占小头)。推论:小模型上「改进 attention」收益明显,大规模时总收益被稀释——所以该看的是目标规模下的占比而非小模型直觉。两个补充:1) 序列变长时 attention 是 $O(L^2)$,占比会回升,长上下文是另一条线;2) 精确比例随架构/超参变,你会在 systems 单元的 resource accounting 和 Assignment 2 里亲手算。出处:讲义引的 Stephen Roller 帖子(https://x.com/stephenroller/status/1579993017234382849)。
-flop的定义和计算公式
+一句话：attention的计算量和model dim d的一次方成正比；MLP的计算量和model dim d的平方成正比；scaling up主要是增大d。所以随着模型scale up，MLP占比越来越大，attention占比越来越小。
+  - flop的定义和计算公式
   - AI: FLOP = Floating-point OPerations,一次浮点运算;工程上常说 MAC(乘加)记 2 FLOPs(一次乘+一次加)。scaling law 里用的标准恒等式是 $C \approx 6ND$ 其中 C=训练总 FLOPs,N=参数量,D=训练 token 数。6N 的来源(每个 token):前向约 2N(每个参数平均被乘加约 2 次),反向约 4N(梯度 + 更新,backward 比 forward 贵约 2 倍),合计 6N。这是对标准 dense Transformer 的近似:忽略了 attention、logits 层、以及激活等二阶项,并假设 batch 足够大;Hoffmann et al. 2022(Chinchilla)用的就是这条近似。真正逐层算清楚是你 Assignment 1/2 里 resource accounting 的内容(讲义有示例:70B × 1T tokens ≈ 4.2e23 FLOPs,即 $6\times 70\times10^9\times10^{12}$)。
-Kernels章节中：Kernels和GPU区别？Kernels是啥？另外，其中的Naive和Fused解释下。
+一次乘加的理解：对于一个长度为
+  - AI 把"一次乘加(MAC)"讲透——
+  - **它是什么**:一次乘加(multiply-accumulate, MAC)指 $a \leftarrow a + x\cdot y$ 这个组合:先算 $x\cdot y$ 一次乘法,再把结果累加进累加器一次加法。硬件上有专门的 FMA(fused multiply-add)指令,一条指令、一次舍入完成 $x\cdot y + a$;tensor core 则一次做一大块矩阵的乘加。
+  - **为什么记 2 FLOPs**:FLOP = "一次浮点运算"(1 次乘法 = 1 FLOP,1 次加法 = 1 FLOP),一个 MAC 含 1 乘 + 1 加 → **2 FLOPs**。⚠️ 口径陷阱:有些文献直接按 MAC 个数计数(1 MAC = 1 operation),两种口径差 2 倍;GPU 规格表的峰值 FLOP/s 用的是 FLOP 口径,比较 MFU 要同口径。
+  - **逐层例子**:
+
+    | 表达式 | 乘 | 加 | FLOPs(FLOP 口径) | MAC 口径 |
+    |---|---|---|---|---|
+    | $y=wx+b$ | 1 | 1 | 2 | 1 |
+    | $n$ 维点积 $\sum_i x_iw_i$ | $n$ | $n-1$ | $2n-1$ | $n$ |
+    | $(B\times D)@(D\times K)$ | $BDK$ | $BDK-BK$ | $\approx 2BDK$ | $BDK$ |
+
+  - 点积的"加"是 $n-1$ 而不是 $n$:第一项相乘后直接当起点,无需加(Lecture 02 里就精确写成 `flops = 2 * n - 1  # n multiplications, n-1 additions`);工程上习惯忽略这个 $-1$。
+  - 矩阵乘的来历:每个输出元素 = 一次长度 $D$ 的点积 = $D$ 个 MAC = $2D$ FLOPs;共 $B\cdot K$ 个输出 → $2BDK$ FLOPs。这就是 Lecture 02 的 `actual_num_flops = 2 * B * D * K`(注释原话:one multiplication and one addition per (i,j,k) triple)。
+  - 比如：一个A*B矩阵@B*C矩阵，得到A*C矩阵，flops的计算可以这样理解：A*C矩阵中每个输出元素，都是由两个B长度的向量相乘产生的，包含B次乘加（忽略加法的-1），计算量是2*B次，则A*C矩阵中有A*C个输出元素，所以总的flops是2*B*A*C。
+  - **与 6ND 对上**:每个参数每处理一个 token,恰好被"乘一次、加一次"(累加)= 1 MAC = 2 FLOPs;所以前向 = $2N$ FLOPs/token。上面旧回答里"每个参数平均被乘加约 2 次"的措辞不够准确,更准确的说法是**每个参数 1 个 MAC = 2 FLOPs**;再乘上数据量 D、并叠加反向约 2 倍 → $6ND$。
+  - **两个易错点**:① FLOPs ≠ 运行时间(同样的 FLOPs,memory-bound 的算子照样慢——Lecture 02 的 "FLOPs are not runtime!" / Lecture 03 P16);② 规格表峰值还依赖 dtype 与稀疏/稠密(H100 bf16 稀疏 1979 vs 稠密 ≈989.5 TFLOPS),拿 MFU 比较时分子分母必须同口径。
+  - Kernels章节中：Kernels和GPU区别？Kernels是啥？另外，其中的Naive和Fused解释下。
   - AI: Kernel ≠ GPU:GPU 是硬件,kernel 是**跑在 GPU 上的一个函数/程序**(由 CPU 启动,内部几千上万个线程并行执行)。你用 PyTorch 时,每个算子(matmul、relu、layernorm…)都会在 GPU 上 launch 一个标准 kernel;kernel 间数据要经过显存 HBM 读写。Naive vs Fused 讲的是**最小化数据搬运**:
   - AI: - Naive:算子 A 的 kernel:读 HBM→算 A→写 HBM;算子 B 的 kernel 再读 HBM→算 B→写 HBM——每个算子都往返一次显存。
   - AI: - Fused:把 A 和 B 合并进一个 kernel:读 HBM 一次→算 A 和 B→写一次。现代 GPU 很多算子是 memory-bound(瓶颈是显存带宽不是计算),省一次读写就是近乎翻倍的收益。讲义的原则就一句:organize computation to minimize data movement。
@@ -41,6 +60,8 @@ Predictability is at least as important as optimality!这个的深入理解，�
   - AI: 你的感觉对,这是 scaling 视角的核心态度转变:**工程/研究决策真正依赖的是「可预测性」而非「小规模上的最优」**。一个小规模上最优化(loss 最低)的 recipe,如果它的行为无法外推,对你做大规模决策毫无价值;反过来,一个在小规模上略次、但 loss 随规模平滑可预测的 recipe,能让你:1) 在大规模花钱前就可靠预注册(preregister)它的预期 loss,2) 低成本比较几十个候选方案再押注。这也解释了为什么课程强调「careful construction of scaling recipe」并把超参设计成可迁移的形式(→ 你后面问的 hyperparameter transfer / μP):可预测性 = 你可以用计算预算换取信息,把昂贵的全规模实验变成少数几次。讲义里 Marin 的例子就是这个哲学:预注册 loss,训练完回来对答案。
 
 Question: given a FLOPs budget (C = 6 N D), use a bigger model (N) or train on more tokens (D)? 这个也没搞懂。为什么需要规定flops预算？ISOFLOP curves是啥？
+  - 一个显然的但是容易混淆的点：transformer的MHA的参数量是4d^2，和序列长度无关。flops不等于参数量，flops的计算公式是6ND，和序列长度有关。N是参数量，D是训练token数。flops预算C=6ND，给定C后，N和D此消彼长，选大N就只能少训数据，反之亦然。
+  - 这块我理解是分两步走：首先基于给定的flops的预算C，以及基于小flops的实验，基于不同的flops下，vally-shape的曲线，得出需要的最佳参数量N是多少（比如10B），然后拟合出一个scaling recipe，预估在我们的target flops下，需要的参数量N是多少，然后基于给定的C和N，根据C=6ND，计算出需要的训练token数D是多少。然后再基于这个scaling recipe，去做超参数的调节。
   - AI: 拆两层:为什么规定预算——现实里你**只有有限的算力/钱/电**(如「这轮训练只有 $10^{23}$ FLOPs」),所以真正要回答的永远是分配问题:给定 C,买更大的模型还是喂更多数据?而 $C=6ND$ 说明在固定 C 下,N 和 D 此消彼长(选大 N 就只能少训数据,反之亦然),不能两全。ISOFLOP curves = **等算力曲线**:把 C 固定为若干档(比如 $10^{19},10^{20},…$),每一档内扫不同的 (N, D) 组合(同一条曲线上 C 相同、N·D 的配比不同),画出 loss;每条等算力曲线的最低点就是该预算下的最优配比。把所有档的最优点连起来,就是讲义里那根 compute-optimal frontier。经典结论(Chinchilla):最优点大致满足 D ≈ 20N(见下)。配套直觉:早期 Kaplan 2020 的配比对数据偏少(模型偏大、欠训);Chinchilla 用等算力曲线更系统地重估后发现应该用**更小的模型 + 更多数据**。
 ![img.png](img.png)compute-optimal scaling laws
 ![img_1.png](img_1.png)compute-optimal frontier可以理解为：这个frontier上的flops是固定的，一个frontier上的点的不同是hyparams的不同，比如D和N的不同组合。
@@ -57,7 +78,7 @@ compute-constrained和data-constrained的关系和区别？为什么说Tomorrow,
 
 tokenizer的compression_ratio是如何计算的？结合 get_compression_ratio 函数解释。是否是compression_ratio = (len(text) / len(tokenizer.encode(text)))，即原始文本长度除以tokenizer编码后的长度？
   - AI: 方向对,但**单位是字节而非字符**。讲义定义(Lecture 01 第 567-571 行):$\text{compression\_ratio}=\frac{\text{len(bytes(string, utf-8))}}{\text{len(indices)}}=\frac{\text{UTF-8 字节数}}{\text{token 数}}$ 即「平均每个 token 打包多少字节」。你的公式只有把 len(text) 理解为 **UTF-8 编码后的字节数**(而非字符数)才成立——纯 ASCII 两者相同,遇到中文/emoji 就不同:"你好" 是 2 字符但 6 字节;🌍 是 1 字符但 4 字节。意义(讲义 610 行):ratio 越大 = 同样内容 token 越少 = 序列越短,对 O(L²) 的 attention 越友好。参考值:ByteTokenizer 恒为 1(1 字节=1 token,最差);BPE/GPT 分词器约 3~5;word 级最高。验证:在 trace-viewer 里跑 lecture_01,对同一字符串看 `get_compression_ratio` 在 char/byte/word/BPE 下的返回值差异。
-
+  - 字符和字节的区别：字符是人类语言的最小单位，字节是计算机存储和处理数据的基本单位。一个字符可能由一个或多个字节表示，尤其是在使用多字节编码（如UTF-8）时。例如，英文字符通常占用1个字节，而中文字符通常占用3个字节，emoji可能占用4个字节。因此，在计算compression_ratio时，需要使用UTF-8编码后的字节数作为分子，以准确反映tokenizer的压缩效果。
 One could increase compression ratio by increasing vocabulary size (number of possible token values increases)
 这句话能否这样理解：增加vocab size就相当于增加了词语的种类，使得我们更能将一句话划分为更少的词语，从而降低tokenizer编码后的长度，从而提高compression ratio？
   - AI: 直觉大体正确:vocab 越大(允许更多、更长的 merge),常见片段更容易整段打包成一个 token,平均序列更短 → ratio 升高。但这是第一层,讲义紧接着给反面(原词):**leading to sparsity(稀疏)**。两个必须知道的代价:1) 长尾稀疏——词表里大量 token 出现频次极低,模型学不到可靠统计(每次见到都近乎新词),embedding 白白占显存;2) 收益递减——压缩率与词表大小大致是对数/亚线性关系,10k→100k 提升明显,再翻几倍收益很小,却让每个 token 更稀有、更难估计分布。所以词表大小是**平衡点**:大到能压住常见文本,又别让尾部 token 变成噪声。BPE 训练的本质就是选 merge 数量,在 ratio 与稀疏/复杂度之间取舍——Assignment 1 你会亲手调 vocab size 感受它。
@@ -66,9 +87,29 @@ CharacterTokenizer、ByteTokenizer、word_tokenizer各自的原理。它们分�
   - AI: 用同一句 "Hello, 🌍! 你好!" 举例(讲义里就是它):
   - AI: - CharacterTokenizer:一个 token = 一个 Unicode 码点(ord)。encode 把每个字符换成整数码点:'H'→72、'你'→20320、'🌍'→127757。优点:简单无损;缺点:词表巨大(Unicode 约 15 万字符、大量极稀有)且压缩率最低——这句 14 个字符就是 14 个 token(讲义原话:worst of both worlds,大词表+低压缩)。
   - AI: - ByteTokenizer:一个 token = 一个 UTF-8 字节(0-255)。encode 先转 UTF-8 字节再逐字节转整数:ASCII 每字符 1 token('H'=72);'你' 3 字节 → 3 token;🌍 4 字节 → 4 token。优点:词表固定 256、极小、可表示任意文本;缺点:压缩率恒为 1,序列很长,而注意力是 O(L²)(讲义原话:terrible)。
+  - AI(补充 2026-09-13)——**ByteTokenizer 逐字节拆解实例**。仍用讲义那句 `"Hello, 🌍! 你好!"`(共 14 个 Unicode 字符),它的 UTF-8 字节流长 **20 字节**,所以 ByteTokenizer 会把它切成 **20 个 token**:
+    - 逐字符对照表(十进制 id = 字节值):
+
+      | 字符 | Unicode | UTF-8 字节(十六进制) | token id 序列 | 占几个 token |
+      |---|---|---|---|---|
+      | `H e l l o , ␠` | ASCII | 48 65 6C 6C 6F 2C 20 | 72, 101, 108, 108, 111, 44, 32 | 7(每字 1) |
+      | `🌍` | U+1F30D | F0 9F 8C 8D | 240, 159, 140, 141 | 4 |
+      | `! ␠` | ASCII | 21 20 | 33, 32 | 2 |
+      | `你` | U+4F60 | E4 BD A0 | 228, 189, 160 | 3 |
+      | `好` | U+597D | E5 A5 BD | 229, 165, 189 | 3 |
+      | `!` | ASCII | 21 | 33 | 1 |
+
+    - 完整结果(与讲义 `ByteTokenizer.encode` 一致):
+      ```python
+      [72, 101, 108, 108, 111, 44, 32, 240, 159, 140, 141, 33, 32, 228, 189, 160, 229, 165, 189, 33]
+      # 长度 = 20 token;压缩比 = 20 字节 / 20 token = 1.0(讲义 line 671 的 assert compression_ratio == 1)
+      ```
+    - **常见字符各占几个 token**(由 UTF-8 的字节数决定):`a`→1、`é`(U+00E9)→2(C3 A9)、`中/文`→3、`🌍/😀`→4;非 ASCII 字符的 token 成本是 ASCII 的 2~4 倍。"一页中文 1000 字"在 ByteTokenizer 下 ≈ 3000 token,而 BPE 可能只要 1000~1500 token。
+    - **两个容易误解的点**:① 单个 token 不必是"合法字符"——`E4` 单独拿出来不是任何汉字,必须把所有字节拼回去再整体 `.decode("utf-8")`(讲义 decode 就是 `b"".join(bytes_list).decode("utf-8")`);② 压缩比恒为 1 意味着**序列长度 = 字节数**,注意力 O(L²) 的代价在高字节语言(中文/emoji/代码)上最重——这就是"byte 级最完备、却最贵"的具体含义。
+    - **同一句话的横向对比**(加深印象):CharacterTokenizer → 14 token(一字符一 token);**ByteTokenizer → 20 token**;word_tokenizer(regex `\w+|.`)→ 约 10 个碎块(空格、`!` 等单独成块);GPT-5 BPE(o200k)→ 约 8~12 token(常见汉字/emoji 可能被合并成更少 token)。
   - AI: - word_tokenizer:正则 \w+|. 切词/非词碎片:"I'll say supercalifragilisticexpialidocious!" → 'I'、'll'、'say'、'supercalifragilisticexpialidocious'、'!' 等。每个 token ≈ 一个词,语义强、压缩率高;但词表 = 语料中的不同词,可能几十万且开放:罕见词学不动、新词只能落到 UNK 占位符(影响困惑度),词表大小也不固定。共性:**token 是模型序列的基本原子**,理想切分要在「token 有意义」与「序列别太长」间取平衡——这正是 BPE 的目标(下一问呼应)。建议在讲义 trace 里跑这三个类看 indices,最直观。
 
-Chunks should be variable (allocate more model capacity to interesting chunks)。这里我想要更加细致地理解下：如果我们地tokenizer不够好，将很多没有意义的chunk分成了token，会如何？
+Chunks should be variable (allocate more model capacity to interesting chunks)。这里我想要更加细致地理解下：如果我们的tokenizer不够好，将很多没有意义的chunk分成了token，会如何？
   - AI: 先理解这句设计目标:模型对**每个 token 位置分配的容量/算力基本相同**(每个位置都过一次 attention/FFN),所以把长文本切得越短,能留给「每单位信息」的容量就越充足。这里 chunk 的"interesting"指**信息密度高、值得模型精细加工的部分**——理想 tokenizer 让常见/低信息片段(如 " the ")塌缩成少数字符少的 token,把位置预算省给真正难的内容,等价于可变粒度 = 自适应计算。
   - AI: 反过来,若 tokenizer 不好、把很多无意义碎片切成 token,后果是链条式的:1) 序列显著变长 → 注意力 O(L²) 的计算/内存成本暴涨,同样上下文窗口能装的内容变少;2) 模型被迫把容量花在字符级琐碎规律(拼写、空格)上,长程依赖被拉长稀释,学语言结构更难;3) 语义被切碎(一个完整词拆成三四个 merge),模型要自己学会"重新组合",统计负担变重;4) 词汇碎片若跨语言/领域分布差,还会放大稀疏性。这正是为什么 byte/char 分词性能吃亏、而 BPE 能赢:它在字节的完备性与词的语义性之间找一个数据驱动的中间粒度。若你还想深挖"interesting"的信息论含义(高熵=高信息),值得补一点熵/交叉熵直觉——已记入 gap-list。
 ## ② 用自己的话复述本讲核心思想
@@ -137,3 +178,103 @@ hyperparameter transfer: 在small scale模型上调好的超参数，能否直�
 - 实验步骤(推文原文要点):已在 ≤1e22 FLOPs 训过一批模型并拟合出 scaling law → 把“在 1e23 FLOPs 时 loss 会是多少”的预测**预注册到 GitHub**(后续推文给的链接:github.com/marin-community/marin/issues/1337)→ @WilliamBarrHeld 正在跑 1e23 那次训练(即图右下角那个孤立的、标注 Currently training! 的 X)→ 几天后对答案。
 - 它示范了什么(与讲义 scaling_laws() 的 Live example 完全对应):1) “用小规模拟合 → 外推到目标规模 → 预注册 → 大规模实跑验证”的完整闭环,正是你之前问的 fit a scaling law to predict loss at target scale 的现实版;2) “要 recipe 不要单个模型”;3) 预注册 = 先写预测再跑,让外推质量可以被证伪。
 - 诚实声明:我目前没有核实到这次 1e23 预测 vs 实跑结果的后续(推文说“几天后见分晓”);需要的话我可以去查 marin issue #1337 或后续推文,把“预测准不准”的答案补进来。
+
+### 2026-09-13 · 追问详解:attention 的 FLOPs 为什么是 $O(Ld)$?(矩阵运算逐步推导)
+
+**先澄清口径**(这是最容易混的地方):同一个 attention,换一种“除以谁”就换一个量级:
+
+| 归一化口径 | 二次部分量级 | 说明 |
+|---|---|---|
+| **整条序列、单层** | $O(L^2d)$ | 标准说法:注意力对序列长度是**平方**的 |
+| **每个 token 分摊** | $O(Ld)$ | 我上次回答里用的口径(与 MLP 的 $O(d^2)$ 对比) |
+| **每个 token 的投影部分** | $O(d^2)$ | QKV/输出投影是“线性层”,不是二次项 |
+
+**记号与计数约定**:序列长 $L$、模型维 $d$、头数 $h$、头维 $k=d/h$;一次“乘加”记 2 FLOPs;矩阵乘 $(m\times p)@(p\times n)$ 成本 $2mnp$。
+A*B矩阵 @ B*C矩阵: flops=2*(A行数)*(B列数)*(B行数) = 2*A*B*C
+**单层 attention 逐算子数一遍**(输入 $X\in\mathbb{R}^{L\times d}$):
+
+| 算子 | 矩阵形状变换 | FLOPs |
+|---|---|---|
+| $Q=XW_Q,\ K=XW_K,\ V=XW_V$ | $(L\times d)@(d\times d)$,3 次 | $3\times 2Ld^2=6Ld^2$ |
+| 打分 $S=QK^\top/\sqrt k$ | $(L\times d)@(d\times L)$(每头 $L^2k$,共 $h$ 头 $=L^2d$) | $2L^2d$ |
+| softmax($S$) | 逐元素,少量常数次运算 | $O(L^2)$(低阶,常忽略) |
+| 加权 $AV$ | $(L\times L)@(L\times d)$ | $2L^2d$ |
+| 输出投影 | $(L\times d)@(d\times d)$ | $2Ld^2$ |
+
+- **二次部分**(只属 attention 的“注意力”部分):$2L^2d+2L^2d=\boxed{4L^2d}$;
+- **线性/投影部分**(与 MLP 同类):$6Ld^2+2Ld^2=8Ld^2$;
+- 单层合计 $\approx 8Ld^2+4L^2d$。
+
+**归一到“每个 token”**:上面每条除以 $L$:
+$\underbrace{8d^2}_{\text{投影(线性)}}+\underbrace{4Ld}_{\text{二次部分}}=O(d^2)+O(Ld)$
+这就是那句“**attention 的 FLOPs 约为 $O(Ld)$**”的来历:**它指的是“每 token 分摊的二次项”,不是整条序列的总量 $O(L^2d)$**。
+
+**与 MLP 对比(为什么“直觉不跨规模”)**:取 $d_{ff}=4d$,每 token 的 MLP $=2\cdot d\cdot 4d+2\cdot 4d\cdot d=16d^2$。于是
+$\frac{\text{attention 二次部分}}{\text{MLP}}=\frac{4Ld}{16d^2}=\frac{L}{4d}$
+- 平衡点 $L=4d$:$L<4d$(短上下文)MLP 主导,$L>4d$(长上下文)attention 主导;
+- **固定上下文 $L$、把 $d$ 调大** → MLP 的 $d^2$ 涨得快、attention 的 $Ld$ 涨得慢 → **attention 占比下降**(Lecture 01 里“MLP 占总 FLOPs 比例随规模上升”的画面);
+- 反过来,长上下文把 $L$ 拉大 → attention 重新变成大头。两个旋钮方向相反,这就是该看“目标规模 + 目标上下文”而非小模型直觉的原因。
+
+**与 $6ND$ 账本的对账(很好的自检)**:每层参数量 $N_{\text{layer}}=4d^2$(attention 的 $QKVO$)$+8d^2$(MLP)=$12d^2$;前向 $2N$/token → 每 token $24d^2$ → 每层 $24Ld^2$。而上面推的“线性部分”$8Ld^2+16Ld^2(\text{MLP})=24Ld^2$ ✓ **完全吻合**。也就是说:$6ND$ 账本恰好只统计了这些线性项,$\boxed{4L^2d}$ 的注意力二次项被它**略掉了**——这正是 Lecture 02 那句 caveat“**短上下文时 $6ND$ 是好近似**”的精确含义:只有 $4L^2d\ll 24Ld^2$,即 $L\ll 6d$ 时才成立;上下文一长,必须在账本里补回二次项。
+
+**decode(KV cache)单步版本**:每生成一个新 token——$Q_{1\times d}@K_{\text{cache}}^\top{}_{d\times L}$ → $2Ld$;$(1\times L)@V_{L\times d}$ → $2Ld$;合计 $4Ld=O(Ld)$。与 prefill 的“每 token 分摊”一致:**$O(Ld)$ 这个量级在两个阶段都成立**;区别在形状——prefill 的两个二次矩阵乘是**大 GEMM**(compute-bound,GPU 容易吃满),decode 是 **GEMV**(memory-bound,带宽吃紧),这就是 Lecture 02/03 里 roofline 与 P60 的差别来源。
+
+**一个数值例子**($d=4096$):
+- $L=8\text{k}=2d$:$4Ld\approx1.34\times10^8$,MLP $16d^2\approx2.68\times10^8$ → attention ≈ MLP 的一半;
+- $L=16\text{k}=4d$:两者相等(平衡点);
+- $L=128\text{k}=32d$:attention ≈ $8\times$ MLP(二次项彻底主导)。
+
+**一句话总结**:整条序列看是 $O(L^2d)$(两个 $L\times L$ 矩阵乘);分摊到每个 token 就是 $O(Ld)$;而 QKV/输出投影与 MLP 一样是 $O(d^2)$ 的线性项——分清“二次项 / 线性项”与“总量 / 每 token”,这类量级问题就不会混。
+
+> 诚实说明:以上按“$k\cdot h=d$、$d_{ff}=4d$、忽略 softmax 低阶项与常数因子”的常见口径推导;若换成 GLU 的 $d_{ff}=\frac83d$,MLP 系数从 $16d^2$ 变为约 $\frac{32}{3}d^2$,平衡点随之右移,结论方向不变。
+
+### 2026-09-13 · 追问详解:激活函数怎么作用?(sigmoid / ReLU / softmax 与张量形状)
+
+**Q1: sigmoid 是对 $[B,L,d]$ 里每个元素都算一次吗?ReLU 呢?**
+
+- **是的,逐元素(elementwise)独立计算,互不影响**。若 $X\in\mathbb{R}^{B\times L\times d}$:
+  $\sigma(X)_{b,l,j}=\frac{1}{1+e^{-X_{b,l,j}}},\qquad \mathrm{ReLU}(X)_{b,l,j}=\max(0,X_{b,l,j})$
+  **输出形状不变** $[B,L,d]$,计算次数 = $B\cdot L\cdot d$。例:$B{=}2,L{=}3,d{=}4$ 的张量 → 24 个元素各自算一次,彼此无依赖。
+- 无参数(纯非线性);反向也逐元素:$\sigma'=\sigma(1-\sigma)$;$\mathrm{ReLU}'=\mathbb{1}[x>0]$。
+- 数值小例(x 是 3 个标量):
+
+  | 输入 $x$ | $\mathrm{ReLU}(x)$ | $\sigma(x)$ |
+  |---|---|---|
+  | -1 | 0 | 0.269 |
+  | 0.5 | 0.5 | 0.622 |
+  | 3 | 3 | 0.953 |
+
+  (三个输出彼此无关、也不要求和为 1——这正是与 softmax 的本质区别,见 Q3。)
+- 类似的 GeLU:`GeLU(x)=x\Phi(x)`(内部含 tanh/erf,**仍是逐元素**,只是每个元素约 20 FLOPs,讲义 `gelu` 的 `flops = 20*n`);Swish:`x\sigma(x)`,也是逐元素。**注意 SwiGLU 整体不是逐元素**:它是门控 $(\mathrm{Swish}(xW_1))\odot(xW_2)W_3$,里面的 $\odot$ 逐元素、但两个线性投影是矩阵乘。
+
+**Q2: Transformer 内部“会经过激活函数”的向量形状一般是什么?**
+
+| 位置 | 张量形状 | 激活 / 归一化 | 沿哪个维度 |
+|---|---|---|---|
+| FFN/MLP 中间层(最常见) | $[B,L,d_{ff}]$,如 GPT-3 $d{=}12288\Rightarrow d_{ff}{=}49152$ | ReLU / GeLU / Swish | 逐元素(无维度) |
+| 门控变体(GLUB/SwiGLU) | $[B,L,d_{ff}]\odot[B,L,d_{ff}]$ | Swish/GeLU 逐元素 × 另一路线性 | 逐元素 |
+| 注意力分数 | $[B,h,L,L]$(每头一个 $L\times L$) | **softmax** | 沿最后一维(key 维) |
+| 输出 logits | $[B,L,V]$ | **softmax**(算 loss 时常与 log-softmax 融合) | 沿 vocab 维 |
+| 门控类(如 GLU/LSTM 门) | $[B,L,d]$ 或中间维 | **sigmoid** | 逐元素 |
+
+- 要点:**逐元素激活不改变形状**;softmax 虽也不改形状,但语义上是“跨元素归一化”(依赖同组的其他元素)。
+- LayerNorm/RMSNorm **不算激活函数**:它们跨特征维统计(可学 $\gamma,\beta$),是归一化层。
+- **为什么逐元素激活很便宜、却常是瓶颈**:它完全并行、无量纲依赖,很难吃满算力——讲义 lecture_02 算过:ReLU 的 arithmetic intensity ≈ 0.25 FLOP/byte(远低于 H100 的 ~295),所以是 **memory-bound**;也正因为形状不变,它可以被 **fuse** 进相邻 kernel(operator fusion)。
+
+**Q3: softmax 算激活函数吗?和 sigmoid 的区别?**
+
+- **算,但是另一个类别**。广义上“激活函数”= 引入非线性的函数,softmax 满足;但它是**归一化/竞争型**:沿指定维度把一组数变成概率分布(和为 1),元素之间**互相耦合**;而 sigmoid/ReLU 是**逐元素、彼此独立**。
+- softmax 与 sigmoid 的关系:
+  $\mathrm{softmax}(z)_i=\frac{e^{z_i}}{\sum_j e^{z_j}},\qquad \sigma(z)=\frac{1}{1+e^{-z}}$
+  - **二分类(N=2)时 softmax 退化为 sigmoid**:$\mathrm{softmax}([z_1,z_2])_1=\sigma(z_1-z_2)$——所以 softmax 可看作 sigmoid 的多元推广(但它额外给出 $N$ 路概率);
+  - **输出含义**:sigmoid 每个输出独立在 $(0,1)$,不要求和为 1;softmax 输出是一个分布,和恒为 1;
+  - **数值稳定性**:softmax 含 $e^{z}$、需减最大值(log-sum-exp)才不会溢出——这正是 Lecture 03 讲 z-loss / QK-norm 的根源;sigmoid 范围温和但也会在 $|z|$ 大时饱和(梯度消失)。
+- **数值对比**(同一组 $[1,2,3]$):
+
+  | 函数 | 输出 | 和 |
+  |---|---|---|
+  | sigmoid | [0.731, 0.881, 0.953] | 2.565(≠1) |
+  | softmax | [0.090, 0.245, 0.665] | 1.000 ✓ |
+
+- **注意力里的具体例子**:$B{=}2,h{=}8,L{=}3$ 时,分数张量 $[2,8,3,3]$,softmax 沿最后一维 → 每个 $(b,h)$ 的 3×3 矩阵**每行和为 1**(每个 query 对 3 个 key 的注意力权重);若换成逐元素 sigmoid,每行和不为 1、也不再是“权重分配”。
+- 一句话记:**sigmoid/ReLU/GeLU/Swish = 逐元素、各管各;softmax = 沿维归一化、互相争抢**。两者常同时出现:FFN 里用逐元素(或门控),attention 与输出层用 softmax。
