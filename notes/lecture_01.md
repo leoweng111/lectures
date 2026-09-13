@@ -117,6 +117,7 @@ tokenization methods、scale recipe等等
 
 ## ③ 触发的新问题 / 想扩展的知识
 SwiGLU主要讲的是啥？
+  - 参考：https://zhuanlan.zhihu.com/p/650237644
   - AI: SwiGLU 是一种**门控激活函数**,把 FFN 里的「线性+ReLU/GeLU」换成了两个投影相乘、其中一个过 Swish 当门:$\mathrm{SwiGLU}(x) = \mathrm{Swish}(xW_1)\odot (xW_2)W_3$(忽略 bias;也可以理解为 FFN 增加了一条门控支路,参数略增但通常去掉 bias 抵消)。直觉:乘性门控让网络能按输入内容“决定传多少信号”,表达力强于逐元素的固定非线性。效果:Shazeer 2020(GLU variants, https://arxiv.org/abs/2002.05202)及后续 PaLM/LLaMA/Qwen 等实证,同参数量下比 ReLU/GeLU FFN 困惑度更低(常有 ~0.1 量级的 PPL 改善量级,随实现而异)。你会在架构单元/Assignment 1 里亲手实现它;讲义把它的出现归为「实验结果先于理论」(那张 divine-benevolence 图的梗)。
 in-context learning是什么含义？
   - AI: in-context learning(ICL,上下文学习/情境学习)= **在推理时不更新任何参数,只把示例/任务说明写进 prompt 上下文,模型就能按示例执行新任务**。典型:few-shot——给 2~3 个 (输入→输出) 例子再丢新输入,GPT-3(175B)时代首次被系统观察到并命名(讲义把它标为 GPT-3 的标志性能力,区别于 BERT 时代「必须 fine-tune」)。本质仍有争议(它到底激活了哪些已学机制、是否等价于隐式梯度等),但对使用者它是「把模型当条件分布用」:p(输出 | 输入 + 示例)。和你的领域相关:排序/召回里拿 LLM 做零样本/少样本特征或 reranker 时,ICL 设计(示例选择、格式)直接影响效果。后续讲义会在 agents/长上下文里继续用这个概念。
