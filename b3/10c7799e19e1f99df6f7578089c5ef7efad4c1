@@ -1,0 +1,22 @@
+notes/lecture_03.md
+  s_21d74b23bf1496::t_98181a7d263684 3-5,7-137,140-143,146,149-150,152-168
+  s_21d74b23bf1496::t_a7aefa19167915 169-199
+notes/gap-list.md
+  s_21d74b23bf1496::t_dda2d269a10849 28-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.44-trip",
+  "base_commit_sha": "b310c7799e19e1f99df6f7578089c5ef7efad4c1",
+  "prompts": {},
+  "sessions": {
+    "s_21d74b23bf1496": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_kt1kocavo829",
+        "model": "DeepSeek-V4-Flash-0731"
+      },
+      "human_author": "wengla <wengla@trip.com>"
+    }
+  }
+}
