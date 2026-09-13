@@ -25,6 +25,12 @@
 - Einstein 求和记号与 einops 实操。
   - 来源:Lecture 02 einops 单元,Assignment 1/后续注意力实现大量使用。
   - 建议资源:einops.rocks 教程 + 用 trace 里的张量把"旧写法"改写成 einops 对拍 allclose。
+- 旋转矩阵 / 复数与内积不变性(Lecture 03 RoPE 的数学底座)。
+  - 来源:Lecture 03 P31-34;理解"旋转后点积只差位置角差"需要二维旋转、复数、内积几何直觉。
+  - 建议资源:3B1B 线性代数系列"旋转与复数"两节 + RoPE 原文(arXiv 2104.09864)推导。
+- 学习率调度与优化动力学(cosine/warmup + weight decay×LR 交互)。
+  - 来源:Lecture 03 P50、讲义 2310.04415;理解 weight decay 为何与 schedule 耦合需要一点 SGD/自适应优化器的动力学直觉。
+  - 建议资源:花书第 8 章(优化)相关节 + Andriushchenko 2310.04415 的图示;到 Assignment 1 调优时动手体会。
 
 ## C 放弃 / 降级
 
