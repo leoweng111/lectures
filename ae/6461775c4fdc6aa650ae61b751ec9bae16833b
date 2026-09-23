@@ -1,0 +1,38 @@
+notes/lecture_02.md
+  s_21d74b23bf1496::t_5874e4b21c5705 432-459,571
+  s_21d74b23bf1496::t_df55270eea121d 262
+  s_21d74b23bf1496::t_c9c703f037367e 355-365,367-373
+  s_21d74b23bf1496::t_a32923e6d6aa51 377-406
+  s_21d74b23bf1496::t_43fa99b6a9e802 530-555
+  s_21d74b23bf1496::t_a4b6e73cb55fa6 556-570
+  s_21d74b23bf1496::t_0243c81a1477db 255-261,263-269,290-291
+  s_21d74b23bf1496::t_7eca9e81e0bec0 63-91
+  s_21d74b23bf1496::t_991838fd1ece65 460-478
+  s_21d74b23bf1496::t_fe5e2cc3ec259c 493-529
+  s_21d74b23bf1496::t_61d8e780f79d4d 195-213
+  s_21d74b23bf1496::t_1e1f0a2b944149 176-192
+  s_21d74b23bf1496::t_3881fb293847d9 128-154
+  s_21d74b23bf1496::t_1583a17e732443 479-492
+  s_21d74b23bf1496::t_9be8e167b47a8d 366
+  s_21d74b23bf1496::t_6b597d2bf8498f 270-289
+  s_21d74b23bf1496::t_44ef5a689afd97 156-157,175,193-194,214-232
+  s_21d74b23bf1496::t_37d5e998b8a92c 24-33,35-62
+  s_21d74b23bf1496::t_7682b54e98b599 253-254,292-304
+  s_21d74b23bf1496::t_5a1d5dd7617a88 158-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.45-trip",
+  "base_commit_sha": "ae6461775c4fdc6aa650ae61b751ec9bae16833b",
+  "prompts": {},
+  "sessions": {
+    "s_21d74b23bf1496": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_kt1kocavo829",
+        "model": "DeepSeek-V4.1-Flash"
+      },
+      "human_author": "wengla <wengla@trip.com>"
+    }
+  }
+}
