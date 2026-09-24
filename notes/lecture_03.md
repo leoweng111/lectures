@@ -4,7 +4,7 @@
 - 状态:进行中(看完后在 [progress.md](progress.md) 更新)
 - 说明:你的问题以 **#TODO** 标注在 PDF 批注层。批注文本在导出时发生了编码损坏(UTF-8 中文被误读),无法 100% 逐字还原,下列"原问"是我**按语义还原的表述**,措辞如有出入请以你在 PDF 中的原始标注为准、并告诉我修正。
 
-> 主题速览:Lecture 03 = LM 架构与超参的"业界共识"——pre/post-norm、LayerNorm vs RMSNorm、门控激活、serial/parallel 块、位置编码(RoPE)、$d_{ff}$/头数/宽深比/词表等超参惯例,以及 z-loss / QK-norm / logit soft-cap 等稳定性技巧、GQA/MQA 与混合注意力。
+> 主题速览:Lecture 03 = LM 架构与超参的"业界共识"——pre/post-norm、LayerNorm vs RMSNorm、门控激活、serial/parallel 块、位置编码(RoPE)、d_ff/头数/宽深比/词表等超参惯例,以及 z-loss / QK-norm / logit soft-cap 等稳定性技巧、GQA/MQA 与混合注意力。
 
 ---
 
@@ -24,11 +24,11 @@
 - [x] **Q2(P14)｜LayerNorm 的完整公式、batch 形状下的计算过程、以及与 RMSNorm 的本质区别**
   > 原问(还原):详细的 layernorm 公式,配合具体 batch 的样本形状变换和计算说明,以及和 RMSNorm 真正本质的区别。
   - **LayerNorm 公式**(对每个样本、每个特征向量归一化):
-    $$\mathrm{LN}(x)=\gamma\odot\frac{x-\mu}{\sqrt{\sigma^2+\epsilon}}+\beta,\qquad \mu=\frac1d\sum_{j=1}^d x_j,\ \ \sigma^2=\frac1d\sum_{j=1}^d (x_j-\mu)^2$$
+    $\mathrm{LN}(x)=\gamma\odot\dfrac{x-\mu}{\sqrt{\sigma^2+\epsilon}}+\beta,\qquad \mu=\dfrac1d\sum_{j=1}^d x_j,\quad \sigma^2=\dfrac1d\sum_{j=1}^d (x_j-\mu)^2$
     其中 $\gamma,\beta\in\mathbb{R}^d$ 是可学习缩放/偏移;**归一化统计量在特征维 $d$ 上算,与 batch 无关**(这是它与 BatchNorm 的本质区别)。
   - **配合 batch 形状算一遍**:设激活 $X\in\mathbb{R}^{B\times S\times d}$(batch × 序列 × 特征)。LN 对每个 $(b,s)$ 行向量独立做:先按行求 $\mu_{b,s}$、$\sigma^2_{b,s}$(对 $d$ 维求和),再逐元素标准化、乘 $\gamma$ 加 $\beta$。输出形状不变 $B\times S\times d$;FLOPs 量级 $O(B\cdot S\cdot d)$(算均值/方差各一遍 + 归一化),但注意它需要**两次读遍数据**(先算统计量、再归一化),这正是它 runtime 偏高的原因之一(见 P16 你的批注)。
   - **RMSNorm 公式**(Zhang & Sennrich 2019,https://arxiv.org/abs/1910.07467):
-    $$\mathrm{RMSNorm}(x)=\frac{x}{\sqrt{\frac1d\sum_j x_j^2+\epsilon}}\odot\gamma$$
+    $\mathrm{RMSNorm}(x)=\dfrac{x}{\sqrt{\frac1d\sum_j x_j^2+\epsilon}}\odot\gamma$
     只做"按均方根缩放",**不减均值、不加 bias($\beta$)**。
   - **本质区别**:LayerNorm 移除的是"均值偏移 + 方差尺度"两个自由度;RMSNorm 只处理"尺度"一个自由度——它假设**均值项对深层 LM 收益低**(信号已在残差中零均值化),砍掉 mean/bias 后参数更少、少一次全局归约(runtime 更快),实证性能基本持平(讲义 15-17 页:Narang et al. 2020 还观察到偶有性能提升)。注意 RMSNorm 仍保留 $\gamma$。
   - 记忆:**LayerNorm = 减均值 + 除方差 + 可学 γ/β;RMSNorm = 只除 RMS + 可学 γ**,差在"去不去均值、要不要 bias",都是**按样本按特征维**归一化、与 batch 无关。
@@ -61,7 +61,7 @@
   > 原问(还原):RoPE 的详细底层原理理解。
   - **目标**:让注意力只依赖相对位置 $i-j$。形式化:要找 $f(x,i)$ 使 $\langle f(x,i),f(y,j)\rangle=g(x,y,i-j)$(讲义 P31)。绝对位置相加做不到(内积出现非相对交叉项),正弦位置编码也做不到(有交叉项),而**内积对旋转不变**——所以把 $x$ 按位置 $i$ 旋转一个角度,内积就会只差"旋转角之差"。
   - **做法**:把 $d$ 维向量按坐标**两两配对**成 $d/2$ 个二维平面,第 $i$ 个 token 的第 $m$ 对坐标旋转角度 $m\theta_m$($\theta_m$ 是随维度递减的频率,类似正弦编码的波长):
-    $$q'_m=\begin{pmatrix}\cos m\theta_m & -\sin m\theta_m\\ \sin m\theta_m & \cos m\theta_m\end{pmatrix}\begin{pmatrix}q_{2m}\\q_{2m+1}\end{pmatrix}$$
+    $q'_{2m}=\cos(m\theta_m)\,q_{2m}-\sin(m\theta_m)\,q_{2m+1},\qquad q'_{2m+1}=\sin(m\theta_m)\,q_{2m}+\cos(m\theta_m)\,q_{2m+1}$
     对 $Q,K$ 都旋转后做点积:旋转矩阵正交 → $\langle \mathrm{Rot}(i)q,\ \mathrm{Rot}(j)k\rangle=\langle q,\ \mathrm{Rot}(j-i)k\rangle$,**只差 $j-i$** ✓。
   - **频率怎么取**(Su et al. 2021,https://arxiv.org/abs/2104.09864):$\theta_m=10000^{-2m/d}$(长上下文常把底数调大,如 500k context 用 $10^6$ 量级)。
   - 与正弦/绝对的区别:P34 讲义:RoPE 是**乘性**的(旋转)、无加法交叉项;而且它作用在 **Q/K 上、每次注意力计算前**,不是在 embedding 层加一次(见 Q8 的 Note)。
@@ -111,7 +111,7 @@
 - [x] **Q12(P50)｜cosine LR decay 的原理;以及"weight decay 与学习率是交互的"**
   > 原问(还原):cosine LR decay 的原理,以及 weight decay 和学习率是交互的,这是什么意思?
   - **cosine schedule 原理**:学习率按半个余弦从峰值 $\eta_{\max}$ 平滑降到接近 0:
-    $$\eta_t=\eta_{\min}+\tfrac12(\eta_{\max}-\eta_{\min})\big(1+\cos(\tfrac{t}{T}\pi)\big)$$
+    $\eta_t=\eta_{\min}+\frac12(\eta_{\max}-\eta_{\min})(1+\cos(\frac{t}{T}\pi))$
     直觉:**前期大步快学、中段平缓、末期精细收敛**,比"固定 LR 到点截断"减少末段的 loss 尖峰与发散(Loshchilov & Hutter 2016,https://arxiv.org/abs/1608.03983);通常前面配 warmup(线性升到峰值),总步数 $T$ 定了 decay 的"急缓"。
   - **weight decay 与 LR 交互是什么意思**(讲义引 Andriushchenko et al.,https://arxiv.org/abs/2310.04415):
     - 机制层面:AdamW 中参数每步额外收缩 $w\gets w-\eta_t\cdot\lambda\cdot w$,收缩量**正比于当前学习率** $\eta_t$——所以同一个 $\lambda$,配不同 schedule(不同 $\eta_t$ 轨迹)等于不同的"有效正则强度轨迹";
@@ -124,12 +124,12 @@
   - **QK-norm(P55)**:在算 $\mathrm{softmax}(QK^\top/\sqrt{k})$ **之前**,先对 $Q$ 和 $K$ 各自做一次 LayerNorm/RMSNorm。作用:控制注意力分数(logits)的尺度上限,防止 softmax 输入过大变饱和/梯度消失;Qwen3、Gemma 2/4、OLMo 系等在用。
   - **Logit soft-cap(P56)**:对 logits 用 $\mathrm{softcap}(z)=\alpha\tanh(z/\alpha)$ 之类做**上界压缩**——硬 clip 会杀梯度,tanh 软上限平滑;稳定了但可能轻微伤表现(讲义提示 perf issues)。Gemma 2 系列用它。
   - **P58:训练/整段(并行)情形的 arithmetic intensity**
-    记号($d$=hidden,$b$=batch,$n$=序列长($<d$),$h$=头数,$k$=$d/h$=头维):总算术量(量级)≈ 投影 $QKV$+输出 $2bnd^2$,加注意力打分/加权 $2bhn^2k=2bn^2d$;总访存量 ≈ 读激活 $bnd$ + 物化注意力矩阵 $bhn^2$ + 权重 $d^2$。则
-    $$\text{AI}=\frac{\text{FLOPs}}{\text{bytes}}\approx \frac{bnd^2}{bnd+bhn^2+d^2}=\frac{1}{\frac1d+\frac{hn}{d^2}+\frac1{bn}}\approx O\!\Big(\big(\tfrac1k+\tfrac1{bn}\big)^{-1}\Big)\ (\text{取 } n\approx d)$$
+    记号($d$=hidden,$b$=batch,$n$=序列长($n<d$),$h$=头数,$k$=$d/h$=头维):总算术量(量级)≈ 投影 $QKV$+输出 $2bnd^2$,加注意力打分/加权 $2bhn^2k=2bn^2d$;总访存量 ≈ 读激活 $bnd$ + 物化注意力矩阵 $bhn^2$ + 权重 $d^2$。则
+    $\text{AI}=\dfrac{\text{FLOPs}}{\text{bytes}}\approx\dfrac{bnd^2}{bnd+bhn^2+d^2}=\dfrac{1}{\frac1d+\frac{hn}{d^2}+\frac1{bn}}\approx O\left(\left(\tfrac1k+\tfrac1{bn}\right)^{-1}\right)$(取 $n\approx d$)
     因为训练里 $b\cdot n$(=单步处理的 token 数)很大、$d$ 很大,$1/d$、$1/(bn)$ 都小 → **AI 高 → compute-bound,GPU 能跑满**(讲义:high, we can keep our GPUs running)。推导口径:常数因子(如 2)不影响量级与 bound 结论;页上确切式子以你 PDF 第 58 页图为准。
   - **P60:增量(生成/decode)情形,为何 AI 变差**
     生成是逐 token 的:每来一个新 token,要拿它的 $Q$ 去和**全部历史 KV** 做注意力,而 KV 得从显存读出来(还要不断写新 KV)。量级:运算 ≈ 对新 token 的投影与注意力($\sim bnd^2$ 口径),访存 ≈ 读全量 KV($bn^2d$)+ 写新 KV($nd^2$):
-    $$\text{AI}=\frac{bnd^2}{bn^2d+nd^2}=\frac{1}{\frac nd+\frac1b}=O\!\Big(\big(\tfrac nd+\tfrac1b\big)^{-1}\Big)$$
+    $\text{AI}=\dfrac{bnd^2}{bn^2d+nd^2}=\dfrac{1}{\frac nd+\frac1b}=O\left(\left(\tfrac nd+\tfrac1b\right)^{-1}\right)$
     两项都难办:$n/d$(序列越长,每个新 token 要读的缓存越多,相对算力越大)和 $1/b$(batch 小)。→ decode 是 **memory-bound**(这也是 Lecture 02 说过"推理 memory-bound"的具体来源);对策:加大 batch($b$)、缩短 $n$(窗口/稀疏注意力)或加大 $d$,而 $n/d$ 项最难降——**于是引出 KV 缓存减负:不要每个头都存全套 KV** → MQA/GQA(P61-62)与稀疏/滑窗注意力(P64-65)。
   - **GQA/MQA 的逻辑(P61-63)**:MQA 让所有 query 头**共享同一份 K/V**(KV 缓存从 $h$ 份降到 1 份,访存大减);GQA 折中为"分组共享"(比如 8 个 query 头共享 1 组 KV)。代价:表达力略降(MQA 有轻微 PPL 损失;GQA 几乎无损,Ainslie et al. 2023,https://arxiv.org/abs/2305.13245)——这就是 P63"GQA 看着最好"的意思。
   - **P65 混合注意力**:每 4 层放一个 full-attention,其余用 local/sliding-window(长程靠低频 full 层、短程靠滑窗),Cohere Command A、Mistral、LLaMA 4、Gemma 3/4 等都在用;本质仍是"在 $n^2$ 成本与表达力之间做结构化取舍"。
@@ -143,6 +143,49 @@
 ---
 
 ## ③ 触发的新问题 / 想扩展的知识
+
+- [x] **Q1(追问 2026-09-23)· position embedding 的定义、数学公式,以及它在 LLM 中的作用(高层次理解)**
+  > 原问:position embedding 的定义、数学公式是什么?能否这样理解:attention 计算本身具有置换不变性,也就是说改变输入句子中 token 顺序,输出的 token 顺序也会相应改变?
+  - **定义**:位置编码(position embedding / positional encoding)是把“token 在序列中的位置”注入模型表示的一类机制。之所以必须额外注入,是因为 self-attention 的权重只由 token 内容算出,**本身不含任何位置信息**。
+  - **数学形式(四类,对应讲义 P30 的四种)**:
+    1. **正弦/余弦(固定,原版 Transformer)**:$PE_{(i,2k)}=\sin(i/10000^{2k/d})$、$PE_{(i,2k+1)}=\cos(i/10000^{2k/d})$,然后**相加**进 token embedding:$E(x,i)=v_x+PE_i$;
+    2. **可学习绝对位置**(GPT-1/2/3、OPT):$E(x,i)=v_x+u_i$,$u_i\in\mathbb{R}^d$ 是每个位置一个的可学习向量;
+    3. **相对位置**(T5、Shaw et al. 2018):位置信息注入**注意力打分**:$e_{ij}=\dfrac{(x_iW_Q)(x_jW_K)^\top}{\sqrt{d_k}}+b_{\,i-j}$(T5 把 $i-j$ 分桶查表,可外推);
+    4. **RoPE(旋转,现代主流)**:不改 embedding,而是对 $Q/K$ 按位置旋转:$\tilde q_i=R_iq_i$、$\tilde k_j=R_jk_j$,且 $\langle R_iq_i,\,R_jk_j\rangle=\langle q_i,\,R_{j-i}k_j\rangle$ —— 内积只依赖**相对位置** $j-i$。
+  - **统一视角**:无位置时打分只有内容项 $e_{ij}=x_i^\top W_Q^\top W_Kx_j$;位置编码有三类注入点——**加在输入上**(式 1/2)、**加在打分上**(式 3)、**作用在 Q/K 上**(式 4)。
+  - **你的理解:方向对,但需一个术语修正**
+    - **正确的一半**:没有位置编码(且无 causal mask)时,self-attention 对输入是**置换等变(permutation-equivariant)**的——输入打乱 $PX$,输出也跟着同样打乱:$\text{Attn}(PX)=P\,\text{Attn}(X)$;
+    - **修正**:严格说是“**等变**”而非“**不变**”(不变 = 打乱后输出完全一样,那是 pooling 类操作的性质)。等变的含义是:**输出向量的顺序跟着输入变,但每个位置上的向量只是它和同现 token 集合的函数,与它们的先后无关**;
+    - **后果**:所以“狗咬人 / 人咬狗”在无位置编码的模型里会得到**相同的表示集合**(只是排列不同) → 模型只能做 bag-of-words(词袋)建模,无法表达词序与距离;
+    - **一个细节修正**:在 **causal(自回归)mask** 下,输出不会随输入置换而简单等变(mask 与位置绑定),但模型仍然**没有任何位置/距离的表示**——它只知道“哪些 token 在我前面”,不知道“隔了多远”,也无法给同一 token 在不同位置以不同表示。所以位置编码依旧是必需的。
+  - **高层次作用(四点)**:
+    1. **打破置换对称性(symmetry breaking)**:让同一 token 在不同位置得到不同表示——这是语言能表达顺序的前提;
+    2. **提供顺序与距离信息**:next-token 预测高度依赖“谁在前、隔多远”(如“上一个 token 是什么”);
+    3. **让注意力能表达位置相关模式**:局部窗口、位置偏置(T5 的 $b_{i-j}$)、RoPE 的相对位置不变性;
+    4. **可外推性**:结构化编码(正弦/RoPE)在训练长度以外有一定泛化(优于可学习绝对编码),但仍有边界——这正是长上下文外推研究的主题。
+  - **一句话**:attention 只看内容、天然“无序”;位置编码的唯一使命就是把“顺序/距离”这条信息塞进模型,而 RoPE 用“乘法旋转”的方式实现了它,是当今天主流。
+
+- [x] **Q2(追问 2026-09-23)· 自回归推理的流程:给定 $T\times C$ 输入,attention 输出也是 $T\times C$,那下一个 token 是怎么来的?**
+  > 原问:自回归推理时,输入是 T×C 的句子(C=每个 token 的 embedding 长度,T=句长),attention 对 T×C 的输出应该也是 T×C 吧?那么就取输出中最后一个 token(长度 C)作为下一个 token,再拼接到原句子上得到 (T+1)×C 的输入,再输出,以此往复?
+  - **结论:流程大体正确,但少了一步“从向量到离散 token”的转换;另外工程实现靠 KV cache 加速。** 完整链条(单样本,略去 batch 维 $B$):
+    1. token ids → embedding 查表 → $X\in\mathbb{R}^{T\times C}$(加位置编码);
+    2. 过 $L$ 层 Transformer(causal self-attention + FFN)——**attention 输出形状不变**,仍是 $T\times C$;
+    3. **取最后一个位置(第 $T$ 行)的向量** $h_T\in\mathbb{R}^{C}$:因为是 causal mask,它“看过”整句 $x_1\dots x_T$;
+    4. 过 **LM head(输出层)**:$h_T\to$(可能先 LayerNorm)→ 线性映射 $W_{\text{head}}\in\mathbb{R}^{V\times C}$ → **logits $z\in\mathbb{R}^{V}$**($V$=词表大小);
+    5. softmax + 采样/argmax → 得到**离散的 token id**(不是直接用那个 $C$ 维向量);
+    6. 该 id 经 embedding 表映射回 $C$ 维向量,拼到序列末尾 → 新序列 $(T+1)\times C$;
+    7. 重复 2-6,直到遇到 EOS 或达到长度上限。
+  - **为何“只取最后一个位置”就够**:causal mask 保证位置 $t$ 的输出只能看到 $\le t$ 的 token,所以第 $T$ 个位置的输出天然是“给定前 $T$ 个 token 的表示”,正好用来预测第 $T+1$ 个;前面位置的输出被丢弃(它们预测的是更早的 token)。
+  - **训练 vs 推理的关键差别**:
+    - **训练是并行的**:输入 $T\times C$、输出也是 $T\times C$,**每个位置都贡献一个预测**(预测“下一个 token”),一次前向就算完 $T$ 个位置——因为 causal mask 挡住了未来,不存在信息泄露(teacher forcing);
+    - **推理必须逐步**:第 $T+1$ 个 token 的输入依赖第 $T$ 步采样出来的 id,无法并行。
+  - **实际实现:KV cache(必须知道)**。按字面流程每生成一个 token 都把整段重算一遍 → 每步 $O(T^2)$、总共 $O(T^3)$,太慢。实际做法:
+    - 每层缓存已算好的 $K,V$,新 token 只算自己的 $q,k,v$,用它的 $q$ 与**缓存的 $K,V$** 做注意力 → 每步只做 $O(T)$ 的注意力 + $O(C^2)$ 的投影;
+    - 这也正是 Lecture 02/03 里“**decode 是 memory-bound**”的原因:$q$ 只有一行,注意力退化成 GEMV,每步都要把整段 KV 从 HBM 读一遍(见 Lecture 03 P60 的 incremental arithmetic intensity 推导)。
+  - **两个常被忽略的细节**:
+    1. **位置编码也要跟着更新**:新 token 的位置是 $T+1$,它的绝对位置向量/RoPE 旋转角要按新位置算——这也解释了为何超出训练长度后性能下降(该位置没被训过);
+    2. **prefill 与 decode 两阶段**:把 prompt 一次性并行处理叫 prefill(compute-bound,像训练);之后逐 token 生成叫 decode(memory-bound);工程上常分开优化(continuous batching、PagedAttention 等)。
+  - **一句话**:形状上你理解没错($T\times C$ 进、$T\times C$ 出);但“下一个 token”不是直接把最后一行向量拼回去,而是 **最后一行 → LM head → 词表 logits → 采样出离散 id → 查 embedding → 再拼接**;而工程实现靠 **KV cache** 避免每步重算整段。
 
 - [ ] (示例)想深入:xxx 与贝叶斯/优化理论的关系
 
@@ -171,7 +214,7 @@
 
 **这一页想回答的问题链(承接 P58-P59)**
 
-P58 论证了**整段并行(训练/prefill)情形**下注意力是 compute-bound(AI 高、GPU 能跑满)。P59 切换到**生成(decode)情形**:生成必须逐 token 串行,前一步的输出是后一步的输入;为了不重算历史 token 的 K/V,用 **KV cache** 把它们存下来。P60 接着问:那这种"带缓存、逐步生成"的注意力的 arithmetic intensity 到底是多少?答案:**很差**,差到 $O\big((n/d+1/b)^{-1}\big)$——这就是"为什么推理是 memory-bound"的精确来源。
+P58 论证了**整段并行(训练/prefill)情形**下注意力是 compute-bound(AI 高、GPU 能跑满)。P59 切换到**生成(decode)情形**:生成必须逐 token 串行,前一步的输出是后一步的输入;为了不重算历史 token 的 K/V,用 **KV cache** 把它们存下来。P60 接着问:那这种"带缓存、逐步生成"的注意力的 arithmetic intensity 到底是多少?答案:**很差**,差到 $O((n/d+1/b)^{-1})$——这就是"为什么推理是 memory-bound"的精确来源。
 
 **符号约定**(与 P58 一致):$b$=batch,$n$=上下文长度(已缓存的 token 数),$d$=隐藏维,$h$=头数,$k=d/h$=头维。生成时每步只处理每个序列的**一个新 token**。
 
@@ -184,15 +227,15 @@ P58 论证了**整段并行(训练/prefill)情形**下注意力是 compute-bound
 
 于是
 
-$\mathrm{AI}=\frac{\mathrm{FLOPs}}{\mathrm{bytes}}\approx\frac{bnd^2}{bn^2d+nd^2}=\frac{1}{\dfrac{n}{d}+\dfrac{1}{b}}=O\!\Big(\big(\tfrac nd+\tfrac1b\big)^{-1}\Big)$
+$\mathrm{AI}=\dfrac{\mathrm{FLOPs}}{\mathrm{bytes}}\approx\dfrac{bnd^2}{bn^2d+nd^2}=\dfrac{1}{\dfrac{n}{d}+\dfrac{1}{b}}=O\left(\left(\tfrac nd+\tfrac1b\right)^{-1}\right)$
 
-**逐步验证中间步骤**:$\frac{bn^2d}{bnd^2}=\frac nd$;$\frac{nd^2}{bnd^2}=\frac1b$,所以分母两项即 $n/d$ 与 $1/b$。
+**逐步验证中间步骤**:$\dfrac{bn^2d}{bnd^2}=\dfrac nd$;$\dfrac{nd^2}{bnd^2}=\dfrac1b$,所以分母两项即 $n/d$ 与 $1/b$。
 
 **“想说明什么”(三点)**
 
 1. **decode 的 AI 由 $n/d$ 主导**:每生成一个 token,都得把越来越长的历史 KV 从显存读一遍——"读的字节随 $n$ 线性增长、而每个新 token 的算法量固定 $O(d^2)$",于是 AI ≈ $d/n$ 随序列增长不断恶化 → **memory-bound**(GPU 算力闲着、带宽吃紧),这量化了 Lecture 02 那句“decode 是 memory-bound、单 token 推理慢”。
 2. **$1/b$ 项说明 batch 能救一部分**:把很多序列打包一起 decode,权重/参数读取与 kernel 启动被分摊,AI 随 $b$ 提升——所以推理服务追求**大 batch(continuous batching)**。但 batch 通常受内存/时延约束,救不了 $n/d$。
-3. **$n/d$ 项最难降**(讲义原话“difficult to reduce”)→ 直接催生下一张 P61 起的方案:**把 KV 缓存变小**。多头的 KV 每头都存一份(共 $h$ 份,每 token 要读 $h\cdot k=d$ 维的 K、V);若让多个 query 头**共享 K/V**(MQA 共享为 1 份,GQA 共享为 $g$ 份),每 token 读回的 KV 就从 $d$ 维降到 $d/g$(MQA 到 $d/h=k$),P60 公式里的 $bn^2d$ 变成 $bn^2\cdot(\text{KV 每 token 维度})$,memory 显著下降;MLA(DeepSeek)更进一步把 KV 压成低秩潜变量。
+3. **$n/d$ 项最难降**(讲义原话“difficult to reduce”)→ 直接催生下一张 P61 起的方案:**把 KV 缓存变小**。多头的 KV 每头都存一份(共 $h$ 份,每 token 要读 $h\cdot k=d$ 维的 K、V);若让多个 query 头**共享 K/V**(MQA 共享为 1 份,GQA 共享为 $g$ 份),每 token 读回的 KV 就从 $d$ 维降到 $d/g$(MQA 到 $d/h=k$),P60 公式里的 $bn^2d$ 中的 $d$ 换成“每 token 的 KV 维度”,memory 显著下降;MLA(DeepSeek)更进一步把 KV 压成低秩潜变量。
 
 **单步直觉(等价口径,便于记)**:对每步而言——算力 = 1 个 token 的 $O(d^2)$ 矩阵乘(batch 放大为 $b$ 份),带宽 = 读完 $n$ 个历史位置的 KV($bnd$)+ 权重($d^2$),$\mathrm{AI}=bd^2/(bnd+d^2)=1/(n/d+1/b)$,与上面完全一致。
 
