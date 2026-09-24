@@ -1,0 +1,21 @@
+notes/lecture_03.md
+  s_21d74b23bf1496::t_ec238de0b9d075 147-150,152-168,170-189
+  s_21d74b23bf1496::t_724d7e4864437e 151,217,238
+  s_21d74b23bf1496::t_fe581b7bfe9520 27,31,64,114,127-128,132,230,232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.45-trip",
+  "base_commit_sha": "29a699f0d6c43c58fc4bf6a8cb69794cd6b7dc21",
+  "prompts": {},
+  "sessions": {
+    "s_21d74b23bf1496": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_kt1kocavo829",
+        "model": "DeepSeek-V4.1-Flash"
+      },
+      "human_author": "wengla <wengla@trip.com>"
+    }
+  }
+}
