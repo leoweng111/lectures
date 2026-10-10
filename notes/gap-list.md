@@ -8,6 +8,12 @@
 - 信息论最小集:熵 / 交叉熵 / KL 散度与困惑度。
   - 来源:Lecture 01 的 compression_ratio、vocab 与"adaptive chunks"背后都是"信息量/熵"的直觉;且 Assignment 1 的 loss(交叉熵)马上要用。
   - 建议资源:任意一节把"交叉熵为什么是语言模型损失"讲透的材料(可搭配 CS229 讲义 5 与花书 3.13),再用 tiktoken/自己 BPE 算几次压缩率找感觉。
+- 线性注意力 / 状态空间模型(SSM)最小集:矩阵状态递推与“对偶性”。
+  - 来源:Lecture 04 P4-P9(linear attention → RetNet → Mamba-2 → Gated DeltaNet)与 P12(DSA);这是理解 2024-2026 架构主线(为什么都在做“线性层 + 全注意力”混合)的前提。
+  - 建议资源:Mamba-2(SSD,arXiv 2405.21060)第 2-3 节 + Gated DeltaNet(arXiv 2412.06464)第 2 节;能自己写出“并行/串行两种形式等价”的推导、并用 numpy 验证“线性注意力的 $Q(K^\top V)$ 与递推形式结果一致”即可。
+- MoE 的系统与训练目标:稀疏路由不可微、负载均衡、专家并行。
+  - 来源:Lecture 04 P27-P46(路由三派、top-k 与 softmax 的位置、平衡损失 / aux-loss-free 偏置、EP + all-to-all、块稀疏 GEMM / LatentMoE)。
+  - 建议资源:Switch Transformer(arXiv 2101.03961)第 2 节 + DeepSeekMoE(2401.06066)/ DeepSeek-V3(2412.19437)的 MoE 章节;把“平衡损失的求导”与“aux-loss-free 偏置的更新”各手推一遍。
 
 ## B 延后
 - 幂律拟合与对数空间回归(log-log)。
@@ -31,6 +37,18 @@
 - 学习率调度与优化动力学(cosine/warmup + weight decay×LR 交互)。
   - 来源:Lecture 03 P50、讲义 2310.04415;理解 weight decay 为何与 schedule 耦合需要一点 SGD/自适应优化器的动力学直觉。
   - 建议资源:花书第 8 章(优化)相关节 + Andriushchenko 2310.04415 的图示;到 Assignment 1 调优时动手体会。
+- 二分匹配 / 线性分配(匈牙利算法、Sinkhorn、线性规划)。
+  - 来源:Lecture 04 P30 的 linear-assignment routing;也见于推荐系统里的“分配/匹配”问题。
+  - 建议资源:运筹学教材的“指派问题”一节 + Sinkhorn 算法的入门推导;能说清“为什么它天然均衡、却不好塞进训练循环”即可。
+- 在线学习 / 快速权重视角(把状态更新看成在线 SGD)。
+  - 来源:Lecture 04 P9 的 Gated Delta Net(讲义点出它与 fast weight programming / test-time training 的关系)。
+  - 建议资源:GDN 论文里的 online-learning 解释 + Schlag et al. 的 fast weight programmers;把它和“递归最小二乘”对上就通了。
+- 稀疏注意力的“检索式选择”(indexer + top-k)。
+  - 来源:Lecture 04 P12-P13(DSA / DeepSeek-V3.2),以及 NSA。
+  - 建议资源:DeepSeek-V3.2(arXiv 2512.02556)第 2 节 + NSA 论文;重点吃透“indexer 仍是二次、主注意力被 k 截断”这条成本结构。
+- MLA 的工程细节:潜变量压缩 + decoupled RoPE。
+  - 来源:Lecture 04 P57-P58(Lecture 03 P62 也出现过);L03 笔记已覆盖一半。
+  - 建议资源:DeepSeek-V2(arXiv 2405.04434)第 2.1 节;自己推一遍“为什么 $W^{UK}$ 能吸收进 $Q$、加了 RoPE 后为什么不能”。
 
 ## C 放弃 / 降级
 
