@@ -49,6 +49,9 @@
 - MLA 的工程细节:潜变量压缩 + decoupled RoPE。
   - 来源:Lecture 04 P57-P58(Lecture 03 P62 也出现过);L03 笔记已覆盖一半。
   - 建议资源:DeepSeek-V2(arXiv 2405.04434)第 2.1 节;自己推一遍“为什么 $W^{UK}$ 能吸收进 $Q$、加了 RoPE 后为什么不能”。
+- 线性代数最小集:矩阵的秩 / 奇异值 / 低秩分解(SVD)。
+  - 来源:Lecture 04 的线性注意力(注意力矩阵 $\mathrm{rank}\le d'$、状态 $S$ 的秩 $\le\min(d_k,d_v)$、memory collision)与 MLA/LoRA 这类低秩技巧;答疑时发现这是“卡理解”的那一步(已在本笔记 Q-L4-1 里做了最小集:定义三等价 + 外积秩 1 + 低秩=通道被卡脖子 + 奇异值读法)。
+  - 建议资源:3B1B 线性代数“秩 / 列空间”两集 + Gilbert Strang 的 SVD 一讲;能在 numpy 里用 svd 验证“rank = 非零奇异值个数”与“$\mathrm{rank}(UV^\top)\le r$”即可。
 
 ## C 放弃 / 降级
 
