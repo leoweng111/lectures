@@ -1,0 +1,33 @@
+notes/lecture_04.md
+  s_21d74b23bf1496::t_73700beb6d88e4 434-437
+  s_21d74b23bf1496::t_8008f1d94c9bd9 440-446
+  s_21d74b23bf1496::t_f5d9260fa62387 32-38,47-55
+  s_21d74b23bf1496::t_80ad7f4d4cfd8a 121,463-480
+  s_21d74b23bf1496::t_695296a3057712 147,154-155
+  s_21d74b23bf1496::t_25540ad306c751 427-433,439
+  s_21d74b23bf1496::t_555a2c306e4546 6,59-60,71-74,76,78-79,81,83,85-87,89,91,93
+  s_21d74b23bf1496::t_f05b707244cbf6 143-144,146,148-153,156-165,167-168
+  s_21d74b23bf1496::t_073cbc00a622f8 66-69,75,77,80,82,84,88,90,92,94
+  s_21d74b23bf1496::t_2422d88b7f81da 62
+  s_21d74b23bf1496::t_1d00cef72d0772 95-103,424-426,438,448-450,452-462
+  s_21d74b23bf1496::t_5d599a5c2f895c 145,166,169-219
+  s_21d74b23bf1496::t_746dece26950fa 378,447,451,514
+notes/gap-list.md
+  s_21d74b23bf1496::t_c5320284562efe 52-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.49-trip",
+  "base_commit_sha": "8e534a76571c6facb7c042d88612fbd4153b1a83",
+  "prompts": {},
+  "sessions": {
+    "s_21d74b23bf1496": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_kt1kocavo829",
+        "model": "DeepSeek-V4.1-Flash"
+      },
+      "human_author": "wengla <wengla@trip.com>"
+    }
+  }
+}
