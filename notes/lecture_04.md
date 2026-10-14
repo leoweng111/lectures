@@ -243,6 +243,149 @@ o     = merge_heads(o) @ W_o                              # [B, T, d]       回�
   - **与其它并行的关系**:DP(切数据,每卡一份模型)、TP(切单层矩阵,通信最频繁、通常限机内)、PP(按层切,需要 micro-batch 填流水)、**EP(按专家切,MoE 特有)**。EP 常常与 DP 组合:不同数据副本走不同专家分片。
   - **训练与推理都用**:训练时 EP 是主流(MoE 层用 EP、注意力层用 TP/DP);推理时常把专家**全部驻留**在显存里、按 token 动态路由(或按热点专家做缓存/分卡),EP 主要解决"放不下"。
   - **系统代价**:负载不均会直接拖慢 all-to-all(最慢设备决定时间),通信量随 token 数与 top-k 增长 ⇒ 这正是 P41-p46 那些平衡与通信优化的动机。
+  - **追问(2026-10-13)｜P19"Parallelizable to many devices"到底在讲什么?EP 的细节(数据/跨卡/梯度/all-to-all)**
+    - **先解读 P19 那张图**(我把这页渲染出来核对过。原图是 GShard 那一路的经典画法):图分三栏,左栏是"单卡上的 MoE Encoder",中/右栏是同一个模型放到 **Device 1 … Device E**。两处关键标注——① 底部写 "Input embeddings + Positional embeddings **(shard 1)**/(shard E)"、顶部写 "Encoder output **(shard i)**" ⇒ **图里的 shard 指的是"输入数据的分片"**,每个设备各吃一份;② MoE 层里 **FFN1 放 Device 1、FFN2 放 Device E**(旁边标 "Model-parallel"),两者之间是 **All-to-All Dispatch / Combine** ⇒ 这才是**专家并行**。所以这张图画的是"**数据并行(每卡一份数据) × 专家并行(专家分到不同卡)**"的混合,而不是"只并行专家"✓
+    - **① EP 并行了什么、要不要数据并行**:并行对象是**专家(FFN 子模块)的参数**;非 MoE 组件(embedding/attention/norm/门控)每卡各一份或走 TP/PP。**数据要并行**:每卡各吃一份分片 ⇒ 实际部署几乎都是 "DP/TP + EP" 的组合 ✓
+    - **② 两种主流 EP 实现**(决定"每卡放多少数据"、也是你困惑的根源):
+      - **(a) all-reduce 式(DeepSeek 官方推理代码 `inference/model.py`)**:每卡持有**全部 token 的激活** + **一部分专家**;各卡只算自己那份专家、把部分结果写进 `y`,最后 **`dist.all_reduce(y)` 求和** ⇒ 每卡都得到完整输出。代码见下方附录 ①(专家按 `rank * n_local_experts` 分片、`all_reduce` 在 `MoE.forward` 末尾、共享专家的 `z` **不参与** reduce)✓
+      - **(b) all-to-all 式(训练/大规模:GShard → Megatron)**:每卡只有**自己那份 token**(`num_local_tokens = S/TP*B`);先算门控 → **all-to-all dispatch** 把 token 激活送到专家所在卡 → 算完 **all-to-all combine** 送回来。代码见附录 ③(含 7 步流程与 `input_splits`/`output_splits`)✓
+    - **③ 你的具体场景**(token1 在卡1、专家 expert1 在卡1、expert2 在卡2):
+      - **(a) all-reduce 式**:卡2 也持有 token1 的激活 ⇒ 卡1 算 expert1 的贡献、卡2 算 expert2 的贡献,`all_reduce` 后两卡都把两部分加起来 ✓。代价是**激活冗余**(每卡都是全量激活),但实现最简单、没有 dispatch 的调度;
+      - **(b) all-to-all 式**:卡1 把 token1 的激活**发给卡2**(dispatch),卡2 算完 expert2 再**发回卡1**(combine),卡1 按门控权重与 expert1 的输出相加 ✓。代价是通信(但只传"需要跨卡的 token"),换来**激活不冗余** ✓
+    - **④ 非 MoE 组件怎么并行 = TP(真实代码见附录 ②)**:`ColumnParallelLinear` 按**输出维**切(每卡算自己那段、无通信);`RowParallelLinear` 按**输入维**切、forward 里 **`dist.all_reduce(y)`** 求和。于是 MLP/注意力的投影写成"列并行 → 激活 → 行并行",**每次只在行并行处做一次 all_reduce** ✓(MLA 的 q/kv 投影同理:列并行 + 行并行输出投影)
+    - **⑤ 梯度要不要共享、怎么共享**(按并行类型):
+      - **DP**:每卡有完整副本 ⇒ 反向各卡得本地梯度 → **all-reduce(求和/平均)** 同步(框架里就是 DDP 的梯度 bucket,或 FSDP/ZeRO 的 reduce-scatter);
+      - **TP**:前向在行并行处 all-reduce ⇒ 反向对应的是"**把上游梯度原样发回每个 rank**"(因 y 是求和,∂L/∂y_r = ∂L/∂y)。注意 **torch 的集合通信本身不可导**,训练时要自己写 autograd Function(前向 all-reduce、反向恒等)或用框架封装——这也是上面推理代码能直接写 `dist.all_reduce` 的原因:推理不需要反向 ✓
+      - **PP**:只在流水线边界传激活/梯度(微批次);
+      - **EP**:每个专家只有**一份副本** ⇒ **专家参数本身不需要跨卡同步梯度** ✓;跨卡传的是"被 dispatch 出去的 token 的激活与其梯度";但**门控是按 token 决策的**,EP 下每卡只看得到自己的 token ⇒ 门控参数的梯度需要跨卡 all-reduce(实现上就是把门控/共享专家当作"数据并行"的参量来同步)✓
+      - **ZeRO/FSDP**:把优化器状态/梯度/参数**分片**(reduce-scatter + all-gather),本质是"用通信换显存"。DeepSeek-MoE 仓库里的 finetune 配置正是这套:`finetune/configs/ds_config_zero2_no_offload.json`、`ds_config_zero3.json` ✓
+    - **⑥ all-to-all 到底是什么**:它是集合通信原语——**每个 rank 把不同的数据块发给每一个其它 rank,同时从每个 rank 收到不同的块**(对比:all-gather 是人人收到**相同**的全体数据;reduce-scatter 是把求和结果**按 rank 分片**发回)。PyTorch 接口:`torch.distributed.all_to_all_single(output, input, output_split_sizes, input_split_sizes)`;在 MoE 里它有两个用途:**dispatch**(按 token 排布 → 按专家排布)与 **combine**(算完 → 还原成按 token 排布)✓。Megatron 代码里要传 `input_splits`/`output_splits` 两个数组,就是因为 all-to-all **必须知道"给每个对端发多少、从每个对端收多少"**(发送量 = 本卡各专家收到的 token 数;接收量 = 各 rank 发给我负责的专家的 token 数)✓
+    - **⑦ 学习资料**:先看**本课程后续讲座**(顺序天然就是从单卡到分布式:L05 GPUs → L06 hardware/programming model → **L07 分布式通信/计算积木 + 分布式训练** → **L08 Parallelism basics**),再看附录末尾的并行/分布式训练外链清单 ✓
+    - **⚠️ 关于你指的 `deepseek-ai/DeepSeek-MoE` 仓库**:我把它 clone 下来看了——**里面只有 `finetune/`(含 DeepSpeed ZeRO-2/3 配置)、`DeepSeekMoE.pdf`(论文)、README 与权重说明,没有模型/并行实现代码**(开源的只有权重 + 微调脚本 + 论文)✗。所以"结合真实代码"我改用两个官方来源:**DeepSeek-V3 官方推理仓库的 `inference/model.py`**(门控/专家/EP/TP 真实实现,附录 ①②)与 **Megatron-LM 的 `token_dispatcher.py`**(EP + all-to-all 标准实现,附录 ③)✓
+
+**Q11 追问补充：真实源码摘录（DeepSeek-V3 官方推理 + Megatron EP）**
+
+```python
+# ============ ① DeepSeek-V3 官方推理代码：EP = 专家按 rank 分片 + all_reduce 汇总 ============
+# 文件：DeepSeek-V3/inference/model.py  （class MoE / class Gate / class Column|RowParallelLinear）
+class MoE(nn.Module):
+    def __init__(self, args):
+        assert args.n_routed_experts % world_size == 0
+        self.n_routed_experts  = args.n_routed_experts
+        self.n_local_experts   = args.n_routed_experts // world_size    # 本卡负责几个专家
+        self.experts_start_idx = rank * self.n_local_experts            # ★ 专家按 rank 切分
+        self.experts_end_idx   = self.experts_start_idx + self.n_local_experts
+        self.gate = Gate(args)                                          # 门控每卡一份（很小）
+        # 只在本卡负责的区间创建专家，其余位置是 None
+        self.experts = nn.ModuleList([
+            Expert(args.dim, args.moe_inter_dim)
+            if i in range(self.experts_start_idx, self.experts_end_idx) else None
+            for i in range(self.n_routed_experts)])
+        self.shared_experts = MLP(args.dim, args.n_shared_experts * args.moe_inter_dim)
+        # ↑ 共享专家 = 一个“把宽度乘上共享专家数”的普通 MLP（所有 token 都过，不参与门控竞争）
+
+    def forward(self, x):
+        x = x.view(-1, self.dim)          # 注意：这份推理代码里【每张卡都持有全部 token】的激活
+        weights, indices = self.gate(x)   # 门控逐 token 决策
+        y = torch.zeros_like(x)
+        counts = torch.bincount(indices.flatten(), minlength=self.n_routed_experts).tolist()
+        for i in range(self.experts_start_idx, self.experts_end_idx):    # ★ 只算【本地】专家
+            if counts[i] == 0:
+                continue
+            expert = self.experts[i]
+            idx, top = torch.where(indices == i)        # 把这些 token 挑出来
+            y[idx] += expert(x[idx]) * weights[idx, top, None]
+        z = self.shared_experts(x)        # 共享专家：所有 token 都过
+        if world_size > 1:
+            dist.all_reduce(y)            # ★ 各卡的部分结果【求和】→ 每卡都拿到完整输出
+        return (y + z).view(shape)        # 注意 z 不参与 all_reduce（否则会被乘 world_size）
+
+# 同文件的门控实现（正好印证 Q16 / Q19 / Q24 的描述）
+class Gate(nn.Module):
+    def __init__(self, args):
+        self.weight = nn.Parameter(torch.empty(args.n_routed_experts, args.dim))   # 单层线性 = 内积门控
+        self.bias = nn.Parameter(torch.empty(args.n_routed_experts, dtype=torch.float32)) \
+                    if args.dim == 7168 else None                                  # V3 才有这个偏置
+    def forward(self, x):
+        scores = linear(x, self.weight)                 # [T, n_routed_experts]：逐专家内积
+        scores = scores.softmax(dim=-1, dtype=torch.float32) \
+                 if self.score_func == "softmax" else scores.sigmoid()
+        original_scores = scores                        # ★ 保存【未加 bias】的分数
+        if self.bias is not None:
+            scores = scores + self.bias                 # ★ bias 只用于【选择】，不进入权重（aux-loss-free）
+        if self.n_groups > 1:                           # ★ 分组路由（V3：8 组里选 4 组）
+            scores = scores.view(x.size(0), self.n_groups, -1)
+            group_scores = (scores.amax(dim=-1) if self.bias is None
+                            else scores.topk(2, dim=-1)[0].sum(dim=-1))
+            indices = group_scores.topk(self.topk_groups, dim=-1)[1]
+            mask = scores.new_ones(x.size(0), self.n_groups, dtype=bool).scatter_(1, indices, False)
+            scores = scores.masked_fill_(mask.unsqueeze(-1), float("-inf")).flatten(1)
+        indices = torch.topk(scores, self.topk, dim=-1)[1]          # ★ 先 topk
+        weights = original_scores.gather(1, indices)                # ★ 再用【原始】分数取权重
+        if self.score_func == "sigmoid":
+            weights /= weights.sum(dim=-1, keepdim=True)            # ★ 只对选中的 k 个归一化
+        weights *= self.route_scale                                 # V3: route_scale = 2.5
+        return weights.type_as(x), indices
+
+# ============ ② 非 MoE 组件怎么并行：TP（张量并行）的两个方向 ============
+class ColumnParallelLinear(Linear):        # 按【输出维】切
+    def __init__(self, in_features, out_features, ...):
+        assert out_features % world_size == 0
+        self.part_out_features = out_features // world_size
+        super().__init__(in_features, self.part_out_features, ...)
+    def forward(self, x):
+        return linear(x, self.weight, self.bias)     # 无需通信：每卡算自己那段输出
+
+class RowParallelLinear(Linear):           # 按【输入维】切
+    def __init__(self, in_features, out_features, ...):
+        assert in_features % world_size == 0
+        self.part_in_features = in_features // world_size
+        super().__init__(self.part_in_features, out_features, ...)
+    def forward(self, x):
+        y = linear(x, self.weight)
+        if world_size > 1:
+            dist.all_reduce(y)               # ★ 整个前向里唯一的通信点：把各卡部分和加起来
+        if self.bias is not None:
+            y += self.bias
+        return y
+# 用法：MLP / 注意力的投影 = ColumnParallelLinear → 激活 → RowParallelLinear
+
+# ============ ③ 训练/大规模的标准 EP：all-to-all dispatch / combine（Megatron-LM） ============
+# 文件：megatron/core/transformer/moe/token_dispatcher.py
+# 文件头记号：H=hidden, B=micro batch, S=seq len, TP, EP
+#   num_local_tokens  = S/TP*B        ← ★ 每卡只持有【自己那份 token】
+#   num_global_tokens = num_local_tokens*TP*EP
+# 类注释里的完整流程（MoEAlltoAllTokenDispatcher）：
+#   (1) preprocess: 算通信元数据 + permute      (2) dispatch process: permute tokens
+#   (3) token dispatch: A2A(EP)                (4) dispatch postprocess: AG(TP) -> sort
+#   (5) combine preprocess: sort -> RS(TP)     (6) token combine: A2A(EP)
+#   (7) combine postprocess: unpermute
+
+global_input_tokens = all_to_all(
+    self.ep_group,
+    permutated_local_input_tokens,     # 已经按“要去哪个专家”排好序的 token 激活
+    self.output_splits,                # 本卡从各 EP rank【接收】多少 token
+    self.input_splits,                 # ★ 本卡向各 EP rank【发送】多少 token
+)
+# input_splits 的计算（文件内注释）：
+#   num_local_tokens_per_expert.reshape(ep_size, num_local_experts).sum(axis=1)
+#   → “发送量 = 本卡各专家收到的 token 数”；接收量由各 rank 的发送量决定
+
+# combine 阶段把两个 splits 反过来，把算完的 token 送回原来的 rank：
+permutated_local_input_tokens = all_to_all(
+    self.ep_group, hidden_states, self.input_splits, self.output_splits)
+
+# 另一种实现（通信更多、显存更省的思路）MoEAllGatherTokenDispatcher：
+#   all-gather 到 TP*EP 全域：[(S/TP)*B, H] -> [((S/TP)*B)*(TP*EP), H] = [S*B*EP, H]
+#   即“每卡都拿到全部 token”，算完再 reduce-scatter 回来
+```
+
+**延伸阅读（数据并行 / 模型并行 / 多卡训练，按推荐顺序）**
+- **本课程（最优先）**:`lecture_05.pdf`（GPUs）→ `lecture_06.py`（hardware / programming model）→ **`lecture_07.py`（Part 1: building blocks of distributed communication/computation;Part 2: distributed training）** → **`lecture_08.pdf`（Parallelism basics）** ✓
+- **长文教程**:The Ultra-Scale Playbook（HuggingFace nanotron 团队）[huggingface.co/spaces/nanotron/ultrascale-playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook) —— 有 DP/TP/PP/CP/EP 的完整推导与**通信量实测对比**;[中文教程](https://github.com/pprp/ultrascale-playbook-zh/tree/main/docs); How to Scale Your Model（jax-ml）[jax-ml.github.io/scaling-book](https://jax-ml.github.io/scaling-book/);Lil'Log《How to Train Really Large Models on Many GPUs?》[lilianweng.github.io/posts/2021-09-25-train-large](https://lilianweng.github.io/posts/2021-09-25-train-large/)
+- **官方文档**:PyTorch 分布式总览与 all_to_all 接口 [pytorch.org/docs/stable/distributed.html](https://pytorch.org/docs/stable/distributed.html);DDP 教程 [pytorch.org/tutorials/intermediate/ddp_tutorial.html](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html);FSDP 教程 [pytorch.org/tutorials/intermediate/FSDP_tutorial.html](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html);HuggingFace《Efficient Training on Multiple GPUs》[huggingface.co/docs/transformers/perf_train_gpu_many](https://huggingface.co/docs/transformers/perf_train_gpu_many)
+- **论文（按这个顺序读）**:张量并行 Megatron-LM [arXiv:1909.08053](https://arxiv.org/abs/1909.08053);流水线并行 GPipe [arXiv:1811.06965](https://arxiv.org/abs/1811.06965);ZeRO [arXiv:1910.02054](https://arxiv.org/abs/1910.02054);**专家并行 + all-to-all 的源头 GShard [arXiv:2006.16668](https://arxiv.org/abs/2006.16668)**（P19 那张图就是这一路）;Switch Transformer（§2.2 讲 EP）[arXiv:2101.03961](https://arxiv.org/abs/2101.03961);DeepSpeed-MoE [arXiv:2201.05596](https://arxiv.org/abs/2201.05596)
+- **代码**:DeepSeek-V3 官方推理 [github.com/deepseek-ai/DeepSeek-V3](https://github.com/deepseek-ai/DeepSeek-V3)（`inference/model.py`）;Megatron-LM [github.com/NVIDIA/Megatron-LM](https://github.com/NVIDIA/Megatron-LM)（`megatron/core/transformer/moe/token_dispatcher.py`）;DeepSeek 开源的 EP 通信库 DeepEP [github.com/deepseek-ai/DeepEP](https://github.com/deepseek-ai/DeepEP)
 
 - [x] **Q12(p24)｜"为什么 MoE 还没更流行"那几句话到底在说什么?**
   > 原问(还原):这段话没看懂。[Why haven't MoEs been more popular? Infrastructure is complex / advantages on multi node; Training objectives are somewhat heuristic (and sometimes unstable)]
@@ -265,6 +408,12 @@ o     = merge_heads(o) @ W_o                              # [B, T, d]       回�
   - **数值例子**(4 专家,$k=1$):token A 分数 $[0.9,0.1,0.05,0.02]$,token B 分数 $[0.05,0.95,0.2,0.1]$。
     - token-choice:A→E1、B→E2,负载均衡 ✓;
     - 若 B 的分数是 $[0.95,0.05,0.2,0.1]$(A、B 都最爱 E1):token-choice 会把**两个都塞给 E1**(E2-E4 闲置,若设容量 1 则有一个 token 被丢弃);expert-choice 在 E1 容量 1 时按分数选 B、A 落到次优专家 ⇒ **天然不爆仓**。
+  - **追问(2026-10-13)｜MoE 一般是 per-token 的吗?token 之间的专家共享吗?讲义怎么描述的?**
+    - **是 per-token 的,但要精确:共享的是"参数池",不共享的只是"选择"**。每个 token(严格说是每个**位置**)独立算门控分数、独立选自己的 top-k;同一句里不同 token 的专家组合一般不同 ✓。但**专家本身是被所有 token 复用的参数模块**——"token 之间不共享专家"这个说法只在"路由选择"这一层成立 ✓。
+    - **讲义的逐页依据**:P15"多个大 FFN + 一个 selector 层";P25"典型做法是替换 MLP(少数是替换 attention heads)";P27 三族路由 + "many routing algorithms boil down to 'choose top k'";**P28"Almost all the MoEs do a standard 'token choice topk' routing"**(← 对本问题的直接回答);P29 各家 k 值(Switch 1、Gshard 2、Mixtral 2、Qwen 4、DeepSeek 7);P31 门控 = logistic regressor,且 "Mixtral, DBRX, DeepSeek v3 softmaxes after the TopK";**P32"a few shared experts that are always on"**(DeepSeek/Qwen)⇒ **共享专家确实被所有 token 使用,不是 per-token**;P35 表头 Routed / Active / Shared(v3 = 256 routed、**8 active**、1 shared)✓。
+    - **三个容易混的点**:① 共享的是参数、不共享的是选择,而且**梯度是按"有多少 token 路由到我"聚合的** ⇒ 这正是"不做平衡就强者恒强"的机制(呼应 Q21);② **共享专家是 always-on**(所有 token 都过),承担通用知识;③ **实现是批量的**(一次算完整批路由 → 按专家 permutation 分组 → 块稀疏 GEMM):"per-token"是语义、"批量"是实现(呼应 Q26/P45)。
+    - **不是 per-token 的例外**(P27/P28/P30):**expert chooses token**(每专家挑固定数量 token,天然均衡但依赖同批其它 token);**global routing / 线性分配**(整批解匹配);**hashing**(仍逐 token 但内容无关,只作基线)。另有"按序列/按组共享路由"的工程变体(为推理时专家缓存局部性),非主流、讲义未提。
+    - **一句话**:主流 MoE = **共享专家池 + 每 token 独立选 top-k(routed)+ 少数 always-on 共享专家**;说"per-token"指路由决策,说"共享"指专家参数 ✓。
 
 - [x] **Q14(p29)｜hashing 路由具体指什么?怎么做?**
   > 原问(还原):hashing 具体指的是啥?如何做的?
@@ -284,6 +433,142 @@ o     = merge_heads(o) @ W_o                              # [B, T, d]       回�
   - **为什么内积就等于"线性层 + softmax"**:任何单层线性门控的第 $i$ 个输出就是 $w_i^\top u_t$——把 $e_i$ 令成 $w_i$,立刻得到 $u_t^\top e_i$。所以"内积门控"和"不带 bias、无隐层的线性层门控"**是同一个东西的两种写法**;文献里说"MLP 门控"通常只是允许它再多一层/带非线性,而实践表明单层线性已经够用且最便宜。
   - **为什么选它**:① 计算量相对专家前向可忽略(只有 $N\times d$ 个参数);② $e_i$ 有清晰的几何解释(专家方向);③ 便于加"负载偏置"做 aux-loss-free 平衡(见 Q24)。
   - 出处:DeepSeekMoE(Dai et al. 2024),[arXiv:2401.06066](https://arxiv.org/abs/2401.06066)。
+  - **追问(2026-10-13)｜用 $[B,T,C]$ 把 top-k 专家网络的门控流程走一遍(形状逐步变)**
+    - **记号与超参**(用 DeepSeek-V3 671B 的真实推理配置 `inference/configs/config_671B.json`):输入 $x\in\mathbb R^{B\times T\times C}$;$N=B\cdot T$ 为 token 总数;$C=7168$;$N_{exp}=256$;$k=8$;$G=8$(组数)、$k_g=4$(选几组);$d_{moe}=2048$(单专家隐藏维);$n_{shared}=1$;route_scale $=2.5$;score_func $=$ sigmoid ✓
+    - **① 展平**:$(B,T,C)\to(N,C)$(实现上就是 `x.view(-1, C)`,只为方便"按 token"处理)✓
+    - **② 门控打分(单层线性 = 内积门控)**:$s=xW_g^\top$,$W_g\in\mathbb R^{N_{exp}\times C}$ ⇒ $s\in\mathbb R^{N\times N_{exp}}$(每个 token 对 256 个专家各一个分数)✓
+    - **③ 激活**:sigmoid(V1-V2 是 softmax)⇒ 形状不变 $(N,N_{exp})$;**同时把"原始分数"记下来**,后面取权重用它 ✓
+    - **④ 路由偏置(V3 的 aux-loss-free)**:$s_{sel}=s+b$,$b\in\mathbb R^{N_{exp}}$ 广播 ⇒ $(N,N_{exp})$;**偏置只给"选择"用的分数,不进最终权重** ✓
+    - **⑤ 分组路由(8 组选 4 组)**:reshape 成 $(N,G,N_{exp}/G)=(N,8,32)$ ⇒ 每组取"组内最高两个分数之和"作为组分数 $(N,8)$ ⇒ 取 top-$k_g=4$ 组 ⇒ 把**未选中组的专家置 $-\infty$** ⇒ 展平回 $(N,N_{exp})$ ✓(好处:以"组/设备"为单位更均衡,直接对接 EP 的通信与负载)
+    - **⑥ top-k 选择**:在 $s_{sel}$ 上取 top-$k=8$ ⇒ 索引 $(N,8)$;权重从**原始分数** gather ⇒ $(N,8)$ ✓
+    - **⑦ 归一化 + 缩放**:sigmoid 时把选中的 8 个权重**除以它们的和**(和为 1),再乘 route_scale $=2.5$ ⇒ $(N,8)$ ✓
+    - **⑧ 按专家计算并加权累加**:对每个本地专家 $i$,取出路由到它的 token $x[\text{idx}]\in\mathbb R^{cnt_i\times C}$ → 过专家(SwiGLU:$W_1,W_3:C\to d_{moe}$,$W_2:d_{moe}\to C$)⇒ $(cnt_i,C)$ → 乘以各自的 $(cnt_i,1)$ 权重、累加到输出 ⇒ $y\in\mathbb R^{N\times C}$ ✓
+    - **关于 $cnt_i$(伪代码里用到)**:$cnt_i$ := **路由到专家 $i$ 的 token 个数**。它有三个要记住的点:① **守恒** $\sum_i cnt_i=N\cdot k$(每个 token 贡献 $k$ 个名额),均衡时平均 $Nk/N_{exp}$(例:$N=4096,k=8,N_{exp}=256$ ⇒ 平均 128);② **数据相关、逐 batch 变化** ⇒ 每个专家拿到的是【**变长**】张量——MoE 的四大实现难题(permute/分组、容量与丢 token、块稀疏 GEMM、负载均衡)全都因它而起;③ 真实代码里它就叫 `counts[i] = torch.bincount(indices.flatten())[i]`(因 top-k 互不重复,等于路由到该专家的 token 数),而且 **EP 下这个数组就是 all-to-all 的 `input_splits`**(见 Q11 附录 ③)✓
+    - **⑨ 加共享专家**:$z=\mathrm{MLP}_{shared}(x)$,内部宽度 $n_{shared}\cdot d_{moe}=2048$ ⇒ $(N,C)$;$y\leftarrow y+z$ ✓
+    - **⑩ 还原形状 + EP 汇总**:view 回 $(B,T,C)$;若开了 EP,对 $y$(路由部分)做 `dist.all_reduce` 把各卡部分结果相加 ✓(共享专家的 $z$ **不参与**,否则会被乘上 world_size)
+    - **一句话**:门控做的全部事情就是"**$(N,C)$ → $(N,256)$ 打分 → 选 8 个 → 得到 $(N,8)$ 的索引与权重**";剩下的都是"按索引把 token 送到专家、再把结果按权重加起来" ✓
+
+**Q16 追问补充：门控 + top-k 专家的形状流伪代码**
+
+```python
+# ===== MoE 门控 + top-k 专家：完整流程(每行标注当前形状) =====
+# 超参取自 DeepSeek-V3 671B 真实推理配置(config_671B.json)
+C       = 7168    # 模型宽 dim
+N_exp   = 256     # 路由专家数 n_routed_experts
+k       = 8       # 每 token 激活几个专家 n_activated_experts
+G       = 8       # 分组数 n_expert_groups
+k_g     = 4       # 选几个组 n_limited_groups
+d_moe   = 2048    # 单个专家的隐藏维 moe_inter_dim
+n_sh    = 1       # 共享专家数(实现为一个宽度 n_sh*d_moe 的 MLP)
+r_scale = 2.5     # route_scale
+
+B, T = ...        # batch、序列长
+N    = B * T      # token 总数
+
+def moe_forward(x, W_gate, b_gate, local_experts, shared_mlp, world_size, rank):
+    # ---------- 0) 输入 ----------
+    # x: [B, T, C]
+    x  = x.view(N, C)                    # [N, C]           展平成 token 维
+
+    # ---------- 1) 门控打分 = 单层线性(内积门控) ----------
+    s  = linear(x, W_gate)               # [N, N_exp]       W_gate: [N_exp, C]
+    s  = sigmoid(s)                      # [N, N_exp]       score_func="sigmoid"(V1-V2 用 softmax)
+    s0 = s                               # [N, N_exp]       ★ 原始分数:最终权重从这里取
+
+    # ---------- 2) 路由偏置(aux-loss-free,只影响“选择”) ----------
+    ss = s + b_gate                      # [N, N_exp]       b_gate: [N_exp] 广播
+
+    # ---------- 3) 分组路由:8 组里选 4 组 ----------
+    g  = ss.view(N, G, N_exp // G)       # [N, 8, 32]       每组 32 个专家
+    gs = g.topk(2, dim=-1)[0].sum(-1)    # [N, 8]           组分数 = 组内最高两个分数之和
+    keep = gs.topk(k_g, dim=-1)[1]       # [N, 4]           选中的组索引
+    m  = ones(N, G, dtype=bool).scatter_(1, keep, False)   # [N, 8]  True = 未选中
+    g  = g.masked_fill(m.unsqueeze(-1), -inf)              # [N, 8, 32] 未选中组的专家置 -inf
+    ss = g.flatten(1)                    # [N, N_exp]       回到扁平
+
+    # ---------- 4) top-k 选择 ----------
+    idx = ss.topk(k, dim=-1)[1]          # [N, 8]           每个 token 选中的 8 个专家
+    w   = s0.gather(1, idx)              # [N, 8]           权重用【原始分数】取(不含 bias)
+    w   = w / w.sum(-1, keepdim=True)    # [N, 8]           sigmoid 时对选中的 8 个归一化(和为 1)
+    w   = w * r_scale                    # [N, 8]           ×2.5
+
+    # ---------- 5) 按专家计算 + 加权累加(以“每卡只算本地专家”的写法为例) ----------
+    #   cnt_i := 路由到专家 i 的 token 个数(即本行 where 结果的长度)
+    #     · 守恒 Σ_i cnt_i = N*k(每个 token 贡献 k 个名额);均衡时平均 N*k/N_exp
+    #     · 数据相关、逐 batch 变化 ⇒ 每个专家拿到的是【变长】张量
+    #     · 真实代码里就叫 counts[i] = torch.bincount(indices.flatten())[i]
+    #     · MoE 的 permute/分组、容量与丢 token、块稀疏 GEMM、负载均衡都因它而起
+    #     · EP 下这个数组就是 all-to-all 的 input_splits(见 Q11 附录 ③)
+    #   取法 (b)(permute 式,真实实现常用):先按专家排序一次,再用 cumsum 切片:
+    #     num = bincount(idx.flatten(), minlength=N_exp)   # [N_exp]    各专家 token 数
+    #     off = cat([zeros(1), num.cumsum(0)])             # [N_exp+1]  各专家区间起点
+    #     blk = permuted_tokens[off[i] : off[i+1]]         # [cnt_i, C] 连续区间,直接喂 grouped GEMM
+    y  = zeros(N, C)                     # [N, C]           输出累加器
+    for i in local_experts:              # 本卡负责的专家(EP 下就是一个专家分片)
+        rows, top = where(idx == i)      # rows: [cnt_i]    top: [cnt_i](命中第几个 top-k)
+        cnt_i = rows.numel()             # 标量            ★ 本专家的 token 数(变长、逐 batch 变)
+        if cnt_i == 0: continue
+        h  = x[rows]                     # [cnt_i, C]       路由到专家 i 的 token
+        h1 = silu(linear(h, W1))         # [cnt_i, d_moe]   W1: [d_moe, C]
+        h3 = linear(h, W3)               # [cnt_i, d_moe]   W3: [d_moe, C]
+        o  = linear(h1 * h3, W2)         # [cnt_i, C]       W2: [C, d_moe]   (SwiGLU)
+        y[rows] += o * w[rows, top, None]  # w[rows, top]: [cnt_i] → [cnt_i, 1] 广播
+    # 注：EP + all-to-all 的实现里,第 5 步换成 permute → A2A dispatch → grouped GEMM → A2A combine
+    #     (见 Q11 附录 ③ 的 Megatron token_dispatcher)
+
+    # ---------- 6) 共享专家(所有 token 都过,权重视为 1) ----------
+    z  = shared_mlp(x)                   # [N, C]           内部宽度 n_sh*d_moe = 2048
+
+    # ---------- 7) 合并 + EP 汇总 + 还原形状 ----------
+    if world_size > 1:
+        all_reduce(y)                    # [N, C]           各卡部分结果求和(z 不参与!)
+    return (y + z).view(B, T, C)         # [B, T, C]
+```
+
+**Q16 追问补充二：为什么“按专家去找 token”，而不是“按 token 去找专家”？**
+
+- **一句话**：路由的**决策**是 token-major(每个 token 选自己的 8 个专家)，但**执行**必须是 expert-major(把要去专家 $i$ 的 token 聚成一批再做 GEMM)，最后再 scatter 回 token-major。这不是两种路由方式，而是同一件事的“决策层 / 执行层” ✓
+- **为什么执行层必须按专家组织**：
+  - **权重属于专家**：专家 $i$ 有自己的 $W_1^{(i)},W_2^{(i)},W_3^{(i)}$，要算它就必须凑出“一批 token × 同一个权重矩阵”的 GEMM 形状；
+  - 若按“每个 token 把自己的 8 个专家都算一遍” ⇒ 变成 $8N$ 次 $1\times C$ 的小乘(GEMV 级)，**同样的 FLOPs，墙钟时间可能差一个数量级** ✗；
+  - EP 下**专家住在特定设备上** ⇒ 发数据也只能按专家聚合后再 all-to-all(见 Q11 附录 ③)；
+  - 这正是 Q26(块稀疏 / grouped GEMM)与 Q28(容量 / 丢 token)存在的根本原因 ✓
+- **两层怎么对接(形状链)**：
+
+  | 阶段 | 操作 | 形状 |
+  | --- | --- | --- |
+  | 决策(token-major) | `idx` / `w` | `[N, 8]` / `[N, 8]` |
+  | 展开成 slot 列表 | `flat_e = idx.flatten()`；`flat_t = arange(N).repeat_interleave(k)`；`flat_w = w.flatten()` | `[N*8]` ×3 |
+  | 按专家排序 / 分组 | `perm = argsort(flat_e)`；`sorted_x = x[flat_t[perm]]`；`off = cat([0], bincount(flat_e).cumsum())` | `[N*8]`；`[N*8, C]`；`[N_exp+1]` |
+  | 执行(expert-major) | 专家 $i$ 的区间 `[off[i], off[i+1])`，长度 = $cnt_i$；逐专家(或 grouped)GEMM | `[cnt_i, C]` |
+  | 收回(token-major) | `y.index_add_(0, flat_t[perm], out * flat_w[perm, None])` | `[N, C]` |
+
+- **三个要点**：① 中间的张量是 $[Nk,C]$，而**不是** $[N,C]$ —— 每个 token 的激活被**复制 $k$ 份**(k 个专家各要一份)；② `flat_t` 是“逆置换的钥匙”，记录每个 slot 属于哪个 token；③ 整条链的守恒量就是 $\sum_i cnt_i=Nk$ ✓
+
+```python
+# ===== 决策(token-major) → 展开/分组 → 执行(expert-major) → 收回(token-major) =====
+idx   = gate(x)                               # [N, 8]        每个 token 选的 8 个专家
+w     = ...                                   # [N, 8]        对应权重
+
+flat_e = idx.flatten()                        # [N*8]         每个 slot 要去的专家
+flat_t = arange(N).repeat_interleave(k)       # [N*8]         ★ 每个 slot 属于哪个 token
+flat_w = w.flatten()                          # [N*8]         每个 slot 的权重
+
+perm     = argsort(flat_e)                    # [N*8]         按专家排序
+sorted_x = x[flat_t[perm]]                    # [N*8, C]      每个 token 出现 k 次(k 个专家各要一份)
+off      = cat([zeros(1), bincount(flat_e, minlength=N_exp).cumsum(0)])   # [N_exp+1]
+#                                              区间 [off[i], off[i+1]) 的长度就是 cnt_i
+
+out = zeros(N*8, C)                           # [N*8, C]
+for i in range(N_exp):                        # 真实实现用 grouped GEMM 一次调完所有专家
+    blk = sorted_x[off[i] : off[i+1]]         # [cnt_i, C]    要去专家 i 的全部 token
+    out[off[i] : off[i+1]] = expert_i(blk)    # [cnt_i, C]    一批 token × 同一个权重 = 一个 GEMM
+
+y = zeros(N, C)                               # [N, C]
+y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 乘权重 + 按 token 累加
+# 注：EP + all-to-all 时，这两步分别对应 dispatch(把 slot 送到专家所在卡)与 combine(把结果送回原卡)
+```
+
 
 - [x] **Q17(p32)｜共享专家的权重是多少?top-k 权重之和等于 1 吗?要不要归一化?**
   > 原问(还原):一般来说,共享专家的权重是多少?比如有 4 个共享专家,那么这四个专家权重都等于 1?另外,top-k 中,选择了 top-k 后,这 k 个专家的权重之和其实不等于 1 吧,那么这里需要做归一化吗?为什么?
@@ -364,6 +649,7 @@ o     = merge_heads(o) @ W_o                              # [B, T, d]       回�
   - **背景**:MoE 里每个 token 只去 $k$ 个专家 ⇒ 计算图天然是**块稀疏**的(行 = token,列 = 专家)。朴素实现有两条烂路:① 按"每专家容量"把 token 补齐到固定形状再算 ⇒ 大量 padding 白算;② 先 permutation 把同专家的 token 聚在一起,再对每个专家单独发一个 GEMM ⇒ 小 kernel 一大堆、启动开销吃掉收益。
   - **做法(MegaBlocks,Gale et al. 2022)**:用 **block-sparse GEMM / grouped GEMM**——一次 kernel 处理"变长分组"的 token,直接跳过没有 token 的块,既省 padding 又省 kernel 启动,还支持动态容量(**不丢 token**)。
   - 一句话:MoE 的瓶颈常在**数据搬运与 kernel 效率**,而不是算术量;块稀疏 GEMM 就是为它定制的算子。参考:Gale et al. 2022,[arXiv:2211.15841](https://arxiv.org/abs/2211.15841)。
+  - **提示:它其实就是 Q16 里那段伪代码的“工程优化版”**。「Q16 追问补充二」里的链路——展开成 slot → 按专家排序分组(`argsort` + `bincount`/`cumsum` 得到区间 `[off[i], off[i+1])`)→ 逐专家取 `[cnt_i, C]` 做 GEMM → 逆置换收回——就是本页说的**朴素实现**(也就是上面那两条“烂路”的 ②);而 **block-sparse / grouped GEMM 就是把这同一条链里的“逐专家小 GEMM”融合成一次 kernel**:直接把 `off`(各专家区间与长度)当“变长分组”喂进去,不用补 padding、也不用发 $N_{exp}$ 个小 kernel ⇒ 这就是“为 MoE 定制的算子” ✓(而“烂路 ①”的 padding/容量问题见 Q28)
 
 - [x] **Q27(p46)｜"把激活下投影以减少通信"这页到底在讲什么?**
   > 原问(还原):这页完全没看懂。
@@ -375,10 +661,18 @@ o     = merge_heads(o) @ W_o                              # [B, T, d]       回�
 
 - [x] **Q28(p47)｜expert capacity 是什么?为什么要 drop token?后果是什么?drop-less 怎么做?**
   > 原问(还原):expert capacity 指的是啥?为啥早期的架构需要 drop tokens that exceed capacity?会造成什么后果?目前的 drop-less 架构是如何做到的?
-  - **expert capacity(专家容量)**:每个专家在一个 batch 内**最多处理多少个 token**,通常写成 $c=\lambda\cdot\frac{kT}{N}$($\lambda$ 是容量因子,常见 1.0~1.25;$T$ 为 batch token 数、$N$ 专家数、$k$ 为 top-k)。
+  - **expert capacity(专家容量)**:每个专家在一个 batch 内**最多处理多少个 token**,通常写成 $c=\lambda\cdot\frac{k\cdot B\cdot T}{N}$($\lambda$ 是容量因子,常见 1.0~1.25;$B$ 为 batch 大小、$T$ 为序列长 ⇒ $B\cdot T$ 才是**整个 batch 的 token 数**;$N$ 为专家数、$k$ 为 top-k;下一条追问会展开这个“整批”的含义)。
   - **为什么要 drop**:早期实现要求每个专家的输入是**固定形状**的张量(才能用规整的 GEMM、静态显存),所以超出容量的 token 只能丢弃;这样系统的形状与时间可预测。
   - **后果**:① 被丢的 token **这一层等于没算 FFN**(质量受损);② 引入**批级随机性**——某个 token 进不进得去,取决于同批次其他人的 query(讲义 P47 的吐槽:"other people's queries can drop your token!"),导致同一条输入在不同 batch 下结果不同、不可复现。
   - **现在怎么做到 drop-less**:靠 ① 块稀疏/grouped GEMM 允许**变长分组**(Q26),② permutation/动态容量让形状随实际负载变化,③ 用路由偏置(aux-loss-free)+合理的容量因子把负载压均衡 ⇒ 容量不再是"硬闸门",而只是一个监控/调节指标。
+  - **追问(2026-10-13)｜"token drop 是 batch-level 的"到底什么意思?别人的样本为什么会影响到我?**
+    - **关键在容量的分母**:Switch 原文的公式是 $\text{expert capacity}=\bigl(\frac{\text{tokens per batch}}{\text{number of experts}}\bigr)\times\text{capacity factor}$(原文式 (3))—— 这里的 **"tokens per batch" 是整个 batch 的 token 总数($B\cdot T$,按 top-k 计还要乘 $k$),不是单条样本的 $T$** ✓。所以**同一个 batch 里所有样本共享每个专家的那块容量池**:别人样本的 token 先把专家 $i$ 的位置占满,轮到你的 token 就没位置了 ⇒ 被丢弃 ✓ —— 这就是"batch-level"的确切含义(讲义 P47 那句吐槽正是这个意思)✓
+    - **你的直觉在什么时候成立**:若 batch 里**只有你一条序列**($B=1$),容量就只由你自己的 token 决定 ⇒ 你只会被"自己句子里的热门 token"挤(长 prompt 内部也会相互抢),与别人无关 ✓。会出问题的是:① 训练时一个 batch 塞进很多条样本(或拼包);② 推理时服务端用 **continuous batching** 把不同用户的请求动态拼进同一个 batch ⇒ 你的输出取决于"此刻同批里别人的请求" ✓
+    - **为什么实现上必须按整批分配固定容量**:Switch 原文说得很直白——"all of our tensor shapes are statically determined at compilation time, but our computation is dynamic due to the routing decisions"。为了让每个专家的输入是**固定形状**(才能用规整的 GEMM 与静态显存),只能在编译期按 batch 预先切好每个专家的缓冲 ⇒ 容量池天然是"整批共享"的 ✓
+    - **被丢的 token 会怎样**:原文——"computation is skipped and the token representation is passed directly to the next layer through the residual connection" ⇒ **这一层的 MoE 输出相当于 0,信息全靠残差带过去** ✓(所以丢 token 是"少过一次变换",不是把 token 删掉)
+    - **两层后果要分开看**:**数值层**——被丢的 token 少过一次专家 ⇒ 你的输出变了,且随同批其他人变化 ⇒ **同一 prompt 两次结果可能不同、不可复现**;**服务层**——即使不丢,负载不均也会让整批等最慢的专家/设备 ⇒ **延迟也被别人影响** ✓
+    - **现状**:主流已用块稀疏 GEMM + 动态容量做到 **drop-less**(正文第三点)⇒ **数值上不再互相干扰**;但"性能上互相影响"依然存在(负载不均 ⇒ 通信/等待),所以平衡损失与路由偏置仍然是必需的 ✓
+    - 参考:Switch Transformer,[arXiv:2101.03961](https://arxiv.org/abs/2101.03961) §2.2(式 (3) 与丢 token 的处理;容量因子经验值 1.0~1.25、典型丢弃率不到 1%)✓
 
 - [x] **Q29(p48)｜MoE 的稳定性问题是什么?为什么"路由器用 FP32(+ z-loss)"能解决?**
   > 原问(还原):这里提到的问题和解决方式?

@@ -52,6 +52,9 @@
 - 线性代数最小集:矩阵的秩 / 奇异值 / 低秩分解(SVD)。
   - 来源:Lecture 04 的线性注意力(注意力矩阵 $\mathrm{rank}\le d'$、状态 $S$ 的秩 $\le\min(d_k,d_v)$、memory collision)与 MLA/LoRA 这类低秩技巧;答疑时发现这是“卡理解”的那一步(已在本笔记 Q-L4-1 里做了最小集:定义三等价 + 外积秩 1 + 低秩=通道被卡脖子 + 奇异值读法)。
   - 建议资源:3B1B 线性代数“秩 / 列空间”两集 + Gilbert Strang 的 SVD 一讲;能在 numpy 里用 svd 验证“rank = 非零奇异值个数”与“$\mathrm{rank}(UV^\top)\le r$”即可。
+- **并行与分布式训练最小集:DP / TP / PP / EP、集合通信(all-reduce / all-gather / all-to-all / reduce-scatter)、梯度同步与 ZeRO/FSDP 分片**。
+  - 来源:Lecture 04 P19(expert parallel)、P44-P46(MoE 并行 / 块稀疏 GEMM / LatentMoE),以及后续 Lecture 07-08(仓库里 `lecture_07.py` 的 "building blocks of distributed communication/computation" + "distributed training"、`lecture_08.pdf` 的 "Parallelism basics");答疑时发现这是“能看懂图、但说不清机制”的典型缺口。
+  - 建议资源(按顺序):本课程 L05(GPUs) → L06 → L07 → L08;The Ultra-Scale Playbook(HuggingFace nanotron);How to Scale Your Model(jax-ml);Lil'Log《How to Train Really Large Models on Many GPUs?》;论文 Megatron-LM(1909.08053)/ GPipe(1811.06965)/ ZeRO(1910.02054)/ GShard(2006.16668,EP 与 all-to-all 的源头)。详细链接清单 + DeepSeek/Megatron 真实源码摘录见 `lecture_04.md` 的 Q11 追问与附录 ✓
 
 ## C 放弃 / 降级
 
