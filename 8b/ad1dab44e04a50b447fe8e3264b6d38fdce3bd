@@ -1,0 +1,33 @@
+notes/lecture_05.md
+  s_21d74b23bf1496::t_d81528720e41f8 368
+  s_21d74b23bf1496::t_fc4aae77e9214a 338-354
+  s_21d74b23bf1496::t_4b950ce987a060 330-335,337
+  s_21d74b23bf1496::t_d28c6e316709bd 356-367
+  s_21d74b23bf1496::t_39514029aabec8 323-329
+  s_21d74b23bf1496::t_1bc38fabbf1432 320
+  s_21d74b23bf1496::t_fdbb4c4a655588 370
+  s_21d74b23bf1496::t_d127464bbab2c5 388
+  s_21d74b23bf1496::t_7aceceabd8203b 382-386,389-417
+  s_21d74b23bf1496::t_aae116b9b7e5d1 387
+  s_21d74b23bf1496::t_563b958ef90668 336
+  s_21d74b23bf1496::t_cf1dfb1a4cd4aa 418-424
+notes/gap-list.md
+  s_21d74b23bf1496::t_3e74c54c1a9ef3 17-19
+  s_21d74b23bf1496::t_de5ee19b5c7209 25-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.50-trip",
+  "base_commit_sha": "8bad1dab44e04a50b447fe8e3264b6d38fdce3bd",
+  "prompts": {},
+  "sessions": {
+    "s_21d74b23bf1496": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_kt1kocavo829",
+        "model": "DeepSeek-V4.1-Flash"
+      },
+      "human_author": "wengla <wengla@trip.com>"
+    }
+  }
+}
