@@ -14,14 +14,20 @@
 - MoE 的系统与训练目标:稀疏路由不可微、负载均衡、专家并行。
   - 来源:Lecture 04 P27-P46(路由三派、top-k 与 softmax 的位置、平衡损失 / aux-loss-free 偏置、EP + all-to-all、块稀疏 GEMM / LatentMoE)。
   - 建议资源:Switch Transformer(arXiv 2101.03961)第 2 节 + DeepSeekMoE(2401.06066)/ DeepSeek-V3(2412.19437)的 MoE 章节;把“平衡损失的求导”与“aux-loss-free 偏置的更新”各手推一遍。
+- **GPU 执行模型与存储层次:SM / SP / thread / block / warp / SIMT;L1(硬件缓存)vs shared memory(程序员管理);SRAM vs DRAM;burst / sense amplifier / row buffer;coalescing;tiling 与对齐、波量化**。
+  - 来源:Lecture 05 全篇(28 条 `#TODO` 有 18 条集中在这一块);它是后续 L06(GPU 编程)与 L07/L08(分布式)的前置。
+  - 建议资源:本笔记 `lecture_05.md` 的 ① A–D 四节 + 文末「补充 1/2」(统一账本、tiling 与波量化公式);[How to Scale Your Model: GPUs](https://jax-ml.github.io/scaling-book/gpus/);Horace He《Making Deep Learning Go Brrrr》;CUDA Mode 入门系列。仍缺的部分:**occupancy / 用性能计数器实测**(留到 Assignment 2 动手时补)。
 
 ## B 延后
 - 幂律拟合与对数空间回归(log-log)。
   - 来源:Lecture 01 scaling laws 小实验 → Assignment 3 拟合 Chinchilla 型幂律;到 P4/Assignment 3 阶段补即可。
   - 建议资源:简单回归复习(线性化 log-log 后最小二乘)+ 官方 Assignment 3 文档。
-- GPU 执行模型(warp/occupancy/访存带宽 vs 算力)。
-  - 来源:Lecture 01 kernels 单元只是术语表,Lecture 13/14 + Assignment 2(Triton)会系统展开。
-  - 建议资源:随课补即可,可先翻 How to Scale Your Model 的硬件/带宽章节。
+- 量化格式的低层细节:MXFP8 / MXFP4 的块缩放(per-32 的 E8M0 scale + E4M3 元素)与"转置为什么要单独量化"。
+  - 来源:Lecture 05 P27–P29 + 本笔记 Q13 与补充 4;理解它是理解 fp8 训练 kernel 与权重加载格式的前提。
+  - 建议资源:OCP Microscaling(MX)规范;讲义 P28 引的 arXiv 2506.08027;在 numpy 里自己实现"分组量化 → 转置 → 重新量化",体会 scale 归属被破坏。
+- CUDA / Triton 编程模型:block / grid / shared memory / `__syncthreads()` / occupancy,以及把「tiling + coalescing + online softmax」写成 kernel。
+  - 来源:Lecture 05 的 tiling 伪码(P41)与 FlashAttention 伪码(本笔记附录),以及 Assignment 2(Triton)的要求。
+  - 建议资源:CUDA C Programming Guide 前几章(编程模型 + 共享内存)+ Triton 官方 tutorial(矩阵乘、fused softmax);先照抄本笔记附录的伪码,再用 Triton 实现并与 PyTorch 对拍。
 - hyperparameter transfer / μP(宽度缩放下 LR/初始化如何迁移)。
   - 来源:Lecture 01 提出"predictability & transfer"思想,μP 论文是深入工具;属前沿内容,放学习后期。
   - 建议资源:Yang et al. 2203.03466 + microsoft/mup 仓库。
