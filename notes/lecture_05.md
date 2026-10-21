@@ -373,7 +373,7 @@
 
 - [x] **Q21(p41)｜按图把 tiling 算法一步步展开:$M_{0,0}$ 是元素还是子矩阵?tile 是什么?**
   > 原问(还原):按照这个例子,详细解释下这个算法。不省略地展开下具体的步骤。这里的 $M_{0,0}$ 指的是一个元素,还是左上角的这个子矩阵?每个 tile 指的是什么?
-  - **$M_{0,0}$ 是子矩阵(不是元素)**:$M_{i,k}$ 表示"第 $i$ 个行块、第 $k$ 个列块"那个 $T\times T$ 的子矩阵 ✓(左上角那块就是 $M_{0,0}$ ✓);**tile = 这样一个子矩阵块**,加载单位是 tile ✓
+  - **$M_{0,0}$ 有两种含义,别混**(这正是最容易卡住的地方):① **图里的标签 $M_{i,j}$ 是"元素"** —— $M$ 是 4×4,第一行的标签 $M_{0,0},M_{0,1},M_{0,2},M_{0,3}$ 就是第一行的 4 个元素 ✓;② **讲义文字 "Load the $M_{0,0}$ *tile*" 里的 $M_{0,0}$ 指"以该元素为首的那个 tile"** —— 即包含 $M_{0,0},M_{0,1},M_{1,0},M_{1,1}$ 的左上角 2×2 块 ✓(下一步的 "$M_{0,2}$ tile" 就是右上的 2×2 块)✓ ⇒ **tile = 由粗黑框围出的子矩阵;句子里的 "$M_{i,j}$ tile" 只是"以首元素命名"的简写** ✓
   - **算法**(算 $P=MN$,块大小 $T$,一个 block 负责一个输出 tile $P_{i,j}$):
     1. `P_local = 0`(放在寄存器里累加);
     2. **for $k=0..K/T-1$**:① 协作把 $M_{i,k}$ 与 $N_{k,j}$ 从 global 拷到 shared memory(每个线程拷一部分,且要 coalesced,见 Q20)② `__syncthreads()` ③ 每个线程算自己负责元素的部分和:$P_{i,j}\mathrel{+}=M_{i,k}N_{k,j}$ ④ `__syncthreads()`(免得下一轮覆盖未读完的数据);
@@ -383,7 +383,7 @@
   - **追问(2026-10-20)｜P40 那句 "not coalesced, and repeated" 什么意思?切块是 4 个子矩阵吗?为什么 tiling 后既走 shared 又能 coalesced?**
     - **先看 P40 在算什么**:图里 4 个线程各负责一个输出元素 $P_{i,j}=\sum_k M_{i,k}N_{k,j}$(右侧 "Access order" 表:thread0,0 依次算 $M_{0,0}N_{0,0}$、$M_{0,1}N_{1,0}$、$M_{0,2}N_{2,0}$、$M_{0,3}N_{3,0}$ ✓)
     - **"repeated"(重复读)**:同一个 $M$ 元素被**同一行的所有输出**用到 —— 表里 $M_{0,0}$ 同时出现在 thread0,0 和 thread0,1 的序列里;同样 $N_{1,0}$ 同时出现在 thread0,0 和 thread1,0 的序列里 ✓。推广到 $N\times N$:每个输入元素被读 **$N$ 次**,总全局读 $\propto 2N^3$(P42 原话)✓
-    - **"not coalesced"(不合并)**:在同一个 $k$ 上,不同 lane 要的地址互不相邻 —— 要 $M_{i,k}$ 就得跨行(间隔一整行),要 $N_{k,j}$ 时同一线程沿列走(行主序下 stride = 行宽)⇒ 一个 warp 的 32 个地址散成很多段。**数值**:1024×1024、float,一列里相邻两行相差 4096 B ⇒ 32 条 lane 读同一列的 32 个元素 = **32 次事务**,只用 128 B 的 32 分之一 ✓
+    - **"not coalesced"(不合并)**:在同一个 $k$ 上,$M$ 侧各 lane 要的是**不同行**的元素(间隔一整行);再加上"每个线程自己沿 $k$ 扫 $N$"这种写法,整个 warp 的 32 个地址就会散成很多段。**数值**:1024×1024、float,相邻两行相差 4096 B ⇒ 32 条 lane 各在一行 = **32 次事务**,只用 128 B 的 32 分之一 ✓
     - **切块方式(P41 图)**:**$M$ 和 $P$ 都是 4×4,各切成 2×2 = 4 块**(每块 2×2 个元素,粗黑框就是块边界);**$N$ 也画在 4×4 的画布上、切成 2×2 = 4 块**,但它只有 2 列 ⇒ **只有左边 2 块有数据、右半边是空的**(每块仍是 2×2)✓ —— 图里 $P_{0,0}$(黄)、$P_{0,1}$(绿)、$P_{1,0}$(红)、$P_{1,1}$(蓝)正好是左上角那个输出 tile 的 4 个元素 ✓
     - **数一下 $M_{0,0}$ 被访问几次**(讲义小例子:$N=4$、$T=2$):① 朴素版被 4 个输出($P_{0,0},P_{0,1},P_{0,2},P_{0,3}$)各用一次 ⇒ **全局读 4 次**;② tiling 后 $M_{0,0}$ 属于 $M$ 的 tile (0,0),该 tile 被 block-row 0 的**每个 block** 各搬一次,而 block-row 0 有 $N/T=2$ 个 block ⇒ **全局读 2 次**;③ 在每个 block 内部,它从 shared 被用 $T=2$ 次(分别算这个 block 的两列输出)⇒ **shared 读 4 次**;④ 合计:**总"使用"仍是 4 次,但只有 2 次走 global** ✓ —— 这正是 P42 的 $N/T$;若 $T=4$(一块覆盖全部列),$M_{0,0}$ 就只从 global 读 **1 次** ✓
     - **完整伪代码**(一个 block 负责一个 $T\times T$ 的输出 tile;`blockDim = (T, T)`,取 $T=32$ 时正好一个 warp 一行):
@@ -423,6 +423,17 @@
       - **这正是"靠 cache"与"靠 tiling"的差别**:cache 是**硬件自动、无保证**;shared 是**程序员显式、可保证** ⇒ 把复用放进 shared,global 读才能稳定降到 $N/T$ ✓
       - **别把两件事混了**:coalescing 与 tiling 正交 —— 即使不 tiling,连续访问照样能合并成一次事务(Q20);tiling 解决的是"**重复读**",不是"合并" ✓
 
+  - **追问(2026-10-21)｜能不能这样理解:$M$ 侧同一时刻只用到 $M_{0,0}$、$M_{1,0}$(跨行 ⇒ 不合并),$N$ 侧 $N_{0,0}$、$N_{0,1}$ 相邻(⇒ 合并);那"一行 × 一列"是不是注定无法完全 coalesced?**
+    - **你对这页的读法是对的** ✓:2×2 的 toy 里,同一时刻 4 条 lane 的地址是 —— $M$:$\{M_{0,0},M_{0,0},M_{1,0},M_{1,0}\}$ ⇒ **2 个不同地址、相隔一整行** ⇒ 2 段、2 次事务 ✗;$N$:$\{N_{0,0},N_{0,0},N_{0,1},N_{0,1}\}$ ⇒ **2 个相邻地址** ⇒ 1 段、1 次事务 ✓
+    - **但两条读是两条不同的指令**(读 $M$ 一条、读 $N$ 一条)⇒ 各自独立地被合并,**不存在"必须同时合并"的约束** ✓
+    - **关键在 lane 怎么铺**。设一个 warp 负责**一行输出**(32 个连续列 $j$):
+      - 读 $N_{k,j}$:32 个连续列 ⇒ **1 条 line** ✓
+      - 读 $M_{i,k}$:32 条 lane 读的是**同一个地址** ⇒ **广播**(1 个 sector,比 coalesced 还便宜)✓
+      ⇒ **两边都省** ✓ —— 所以"注定无法完全 coalesced"**不成立** ✗
+    - **反过来**,lane 沿输出行铺开(同一列 $j$、32 个不同输出行):$M_{i,k}$ 跨 32 行 ⇒ **32 次事务** ✗;$N_{k,j}$ 变成广播 ✓ ⇒ 坏在其中一边 ✓
+    - **真正的限制**:**同一套 lane 布局,不能让两个操作数的地址同时"连续"**;你只能选"一边连续 + 一边广播"(可接受)或"一边广播 + 一边散掉"(不可接受)⇒ 这是"选映射";更彻底的是 **tiling** —— 把"搬运"做成独立、完全 coalesced 的循环,计算退到 shared ✓(P41 那句 "memory access can be coalesced")
+    - **别忘了另一半**:朴素版真正的痛点是 **repeated**($M_{0,0}$ 被重复读) —— 即使合并做得再好,$2N^3$ 的全局流量也降不下来,tiling 正是同时治这两个病 ✓
+
 - [x] **Q22(p43)｜$256\times256 @ 256\times257$ 为什么产生大量空白 tile?为什么不能跳过空白?**
   > 原问(还原):为啥这里 $256\times256 @ 256\times257$ 的矩阵运算,就会产生这么大的空白 tile?为啥不能空白的就不 tile 了?我不理解底层原理。
   - **算一下**:输出是 $256\times257$;若 tile 是 $256\times128$ ⇒ 行块数 $\lceil256/256\rceil=1$、列块数 $\lceil257/128\rceil=3$ ⇒ 共 **3 个 tile**,覆盖 $256\times384$ 的网格 ⇒ **127 列是空的**,利用率约 $257/384\approx67\%$ ✓;而 $256\times256$ 恰好 2 个 tile、零浪费 ✓
@@ -443,6 +454,17 @@
   - **与 SM 的关系**:**A100 有 108 个 SM** ⇒ 98 个 tile **一波就能全部启动**(98 ≤ 108)✓;120 个 tile 则要 **两波**:第一波 108 个、第二波只剩 **12 个**(96 个 SM 空转)⇒ 墙钟时间 ≈ **2 波**,而不是 $120/108\approx1.11$ 波 ✓
   - **这就是 wave quantization(波量化)**:任务数不是 SM 数的整数倍时,最后一波利用率骤降 ⇒ 性能呈"阶梯状"(P48:"What's with the periodic behavior?" ✓)
   - **缓解**:调 tile 大小使 tile 数接近 SM 的整数倍;或用 split-K、persistent kernel 做负载均衡 ✓
+  - **追问(2026-10-21)｜thonking.ai 里"这些峰(2944、3120)不在 256 的倍数上,而在 128 mod 256"是什么意思?**
+    - **先解释 "mod"**:$n \bmod 256$ 就是 $n$ 除以 256 的**余数** ✓;"128 mod 256" = 余数为 128 的尺寸,即形如 $256k+128$ 的数 ✓(例如 $2944=11\times256+128$、$3200=12\times256+128$)✓
+    - **这句话在讲什么**:性能曲线的"峰"不出现在"能被 256 整除"的尺寸上,而是出现在"除以 256 余 128"的尺寸上 ✓ —— 作者随后指出这不是访存布局问题,而是 **wave quantization**(与 Q24 同款)✓
+    - **为什么恰好是 128 mod 256**(A100、108 个 SM、128 宽的 tile):tile 数 $G=\lceil n/128\rceil^2$,波数 $W=\lceil G/108\rceil$,填充率 $=G/(108W)$ ✓
+      - $n=2944$ ⇒ $\lceil2944/128\rceil=23$ ⇒ $G=529$ ⇒ $W=5$,填充率 $529/540\approx98\%$ ✓ **峰**
+      - $n=3072$ ⇒ 24 ⇒ $G=576$ ⇒ $W=6$,填充率 $576/648\approx89\%$ ✗ 掉下去
+      - $n=3200$ ⇒ 25 ⇒ $G=625$ ⇒ $W=6$,填充率 $625/648\approx96\%$ ✓ 又一个峰
+      - $n=3232$ ⇒ 26 ⇒ $G=676$ ⇒ $W=7$ ✗ 再掉
+      ⇒ 峰都出现在"**刚好还没跨进下一波**"的尺寸上;而 23、25 这类**奇数个 128-tile** 对应的 $n$ 除以 256 余 128 ✓,峰就落在"128 mod 256"上 ✓
+    - **一处文内不一致**:文中写的峰是 2944 与 **3120**,但 $3120\bmod256=48$;不过 $\lceil3120/128\rceil=25=\lceil3200/128\rceil$ ⇒ 3120 与 3200 落在**同一个 tile 桶**、表现相同(所以图上是一段平台)⇒ "128 mod 256"严格说是这个桶的上界 3200 ✓
+    - **一句话**:尺寸每跨过一个"tile 数 × 128"的整数倍就多跑一波;所以每个 256 区间里"最靠后、但还没跨波"的那一档(余 128)最快 ✓
 
 - [x] **Q25(p49)｜这里的 shared memory 指什么?**
   > 原问(还原):这里的 shard memory 指的是啥?
@@ -481,28 +503,71 @@
   - **对比朴素实现**:`S = Q @ K.T`(写 HBM)→ `P = softmax(S)`(读+写 HBM)→ `O = P @ V`(读 HBM)⇒ 两个 $n\times n$ 各往返一次 ⇒ 显存与带宽都被吃爆 ✗;FA 把这两个 $n\times n$ 抹掉 ⇒ 显存从 $O(n^2)$ 降到 $O(n)$,带宽同理 ✓
   - 一句话:**FA 的"魔法" = 让 $S/P$ 只活在 SRAM,只让 $Q,K,V,O$ 进出 HBM** ✓
 
-**附录：FlashAttention 前向伪代码(块大小 $B_r\times B_c$)**
+**附录：FlashAttention 前向伪代码(块大小 $B_r\times B_c$;符号沿用《自回归训练》"详细版本")**
 
 ```python
-# Q, K, V: [n, d]；分块：Q 按行切 B_r，K/V 按行切 B_c
-for i in range(0, n, B_r):
-    Q_i = load(Q[i:i+B_r])                  # [B_r, d]          从 HBM 读进 SRAM
-    m = full(B_r, -inf)                     # [B_r]             行最大值（运行中维护）
-    l = zeros(B_r)                          # [B_r]             行和（运行中维护）
-    O = zeros(B_r, d)                       # [B_r, d]          输出累加器
-    for j in range(0, n, B_c):
-        K_j = load(K[j:j+B_c])              # [B_c, d]          从 HBM 读进 SRAM
-        V_j = load(V[j:j+B_c])              # [B_c, d]
-        S_ij = Q_i @ K_j.T / sqrt(d)        # [B_r, B_c]        ★ 只在 SRAM，不写回
-        S_ij = mask(S_ij)                   # [B_r, B_c]        因果 / 填充掩码
-        m_new = maximum(m, rowmax(S_ij))    # [B_r]
-        P_ij = exp(S_ij - m_new[:, None])   # [B_r, B_c]        ★ 融合：exp 就地算
-        l = l * exp(m - m_new) + rowsum(P_ij)              # [B_r]      ★ 望远镜求和：旧和重标定
-        O = O * exp(m - m_new)[:, None] + P_ij @ V_j        # [B_r, d]   ★ 旧输出也重标定
-        m = m_new
-    O = O / l[:, None]                      # [B_r, d]          最终归一化
-    write(O, O_out[i:i+B_r])                # [B_r, d]          写回 HBM
+# 维度约定（沿用文档:自回归训练 → 训练过程伪代码 → 详细版本）：
+#   B = batch, T = 序列长, C = hidden, H = 头数, d_h = C/H, d_ff = FFN 中间维
+# 分块：Br = 一次处理多少个 query 行；Bc = 一次处理多少个 key 列（都受 shared memory 上限约束）
+# 进入本函数前：q = rearrange(hn @ W_q, "b t (h d) -> b h t d", h=H)，k、v 同理
+
+def flash_attention_forward(q, k, v, Br, Bc, causal=True):
+    # q, k, v 形状: [B, H, T, d_h]
+    O   = zeros(B, H, T, d_h)      # 形状: [B, H, T, d_h]  最终输出（写回 global）
+    lse = zeros(B, H, T)           # 形状: [B, H, T]       每行 logsumexp（反向重算用，可选保存）
+    scale = 1 / sqrt(d_h)          # 形状: 标量 []
+
+    for i in range(0, T, Br):                          # 外层：Q 的行块
+        q_i = q[:, :, i:i+Br, :]                       # 形状: [B, H, Br, d_h]   ← 读进 SRAM
+        m_i = full(B, H, Br, -inf)                     # 形状: [B, H, Br]        运行最大值 m
+        l_i = zeros(B, H, Br)                          # 形状: [B, H, Br]        运行分母 l
+        o_i = zeros(B, H, Br, d_h)                     # 形状: [B, H, Br, d_h]   未归一化输出累加器
+
+        for j in range(0, T, Bc):                      # 内层：K/V 的列块
+            if causal and j > i + Br - 1:              # 因果：整块都在对角线右侧 ⇒ 全被 mask，直接跳过
+                break
+            k_j = k[:, :, j:j+Bc, :]                   # 形状: [B, H, Bc, d_h]
+            v_j = v[:, :, j:j+Bc, :]                   # 形状: [B, H, Bc, d_h]
+
+            scores_ij = q_i @ k_j.transpose(-1, -2) * scale          # 形状: [B, H, Br, Bc]  ★ 只在 SRAM
+            scores_ij = scores_ij + causal_mask[i:i+Br, j:j+Bc]      # 上三角 = -inf
+
+            m_new = maximum(m_i, scores_ij.max(dim=-1).values)       # 形状: [B, H, Br]
+            p_ij  = exp(scores_ij - m_new[..., None])                # 形状: [B, H, Br, Bc]  未归一化权重
+            l_i = l_i * exp(m_i - m_new) + p_ij.sum(dim=-1)          # 形状: [B, H, Br]      望远镜求和
+            o_i = o_i * exp(m_i - m_new)[..., None] + p_ij @ v_j     # 形状: [B, H, Br, d_h] 旧输出重标定
+            m_i = m_new
+
+        O[:, :, i:i+Br, :] = o_i / l_i[..., None]      # 形状: [B, H, Br, d_h]  归一化后写回 global
+        lse[:, :, i:i+Br] = m_i + log(l_i)             # 形状: [B, H, Br]       供反向重算
+
+    return O                                           # 形状: [B, H, T, d_h]
+
+
+# 放回 train_step 的每层里，就是把原来的三行
+#     scores = q @ k.transpose(-1, -2) / sqrt(d_h)   # [B, H, T-1, T-1]
+#     attn   = softmax(scores, dim=-1)               # [B, H, T-1, T-1]
+#     o      = attn @ v                              # [B, H, T-1, d_h]
+# 换成
+#     o = flash_attention_forward(q, k, v, Br, Bc)   # [B, H, T-1, d_h]
+#     o = rearrange(o, "b h t d -> b t (h d)")       # [B, T-1, C]
+#     h = h + o @ W_o                                # [B, T-1, C]
 ```
+
+**附录补充:这里 softmax 的数学公式(沿用上面的 $[B,H,T,d_h]$ 记号)**
+
+- **形状**:$q,k,v\in\mathbb{R}^{B\times H\times T\times d_h}$;对每个 $(b,h)$,打分 $s$ 与权重 $\mathrm{attn}$ 都是 $T\times T$;$o\in\mathbb{R}^{B\times H\times T\times d_h}$ ✓
+- **打分**:$s_{b,h,i,j}=\dfrac{1}{\sqrt{d_h}}\sum_{c=1}^{d_h}q_{b,h,i,c}\,k_{b,h,j,c}+M_{ij}$ ✓,其中 $M_{ij}=0$ 表示可见、$M_{ij}=-\infty$ 表示被遮;$M$ 是 $[T,T]$,在 $(b,h)$ 上广播 ✓ —— 就是伪代码里 `scores_ij = q_i @ k_j.transpose(-1,-2) * scale` 再 `+ causal_mask[i:i+Br, j:j+Bc]` ✓
+- **softmax(沿 $j$,即 `dim=-1`)**:$\mathrm{attn}_{b,h,i,j}=\dfrac{\exp(s_{b,h,i,j})}{\sum_{j'=1}^{T}\exp(s_{b,h,i,j'})}$,且 $\sum_{j=1}^{T}\mathrm{attn}_{b,h,i,j}=1$ ✓ —— **分母是整行的 $T$ 个 key**,不是 $B_c$、也不是 $T-1$ ✓
+- **加权求和**:$o_{b,h,i,:}=\sum_{j=1}^{T}\mathrm{attn}_{b,h,i,j}\,v_{b,h,j,:}\in\mathbb{R}^{d_h}$ ✓
+- **数值稳定写法(与上面严格等价)**:令 $m_{b,h,i}=\max_{j}s_{b,h,i,j}$,则 $\mathrm{attn}_{b,h,i,j}=\dfrac{\exp(s_{b,h,i,j}-m_{b,h,i})}{\sum_{j'}\exp(s_{b,h,i,j'}-m_{b,h,i})}$ ✓(分子分母同乘 $e^{-m}$,值不变 ✓)
+- **分块增量版(伪代码里 `m_i/l_i/o_i` 的公式)**:设本块列集合 $\mathcal{B}=\{j_0,\dots,j_0+B_c-1\}$,已处理完之前的块、手上是 $m,\ell,o$;新块到来时 ——
+  - $m'=\max\bigl(m,\ \max_{j\in\mathcal{B}}s_{b,h,i,j}\bigr)$ ✓
+  - $\ell'=e^{m-m'}\ell+\sum_{j\in\mathcal{B}}e^{s_{b,h,i,j}-m'}$ ✓
+  - $o'=e^{m-m'}o+\sum_{j\in\mathcal{B}}e^{s_{b,h,i,j}-m'}v_{b,h,j,:}$ ✓
+  - 所有块扫完后输出 $o/\ell$,与完整 softmax 的结果严格相等 ✓;若要供反向用,再存 $\mathrm{lse}_{b,h,i}=m+\log\ell$ ✓
+- **为什么分块版与整体版相等**:由 $e^{s-m}=e^{s-m'}e^{m-m'}$ 得 $e^{m-m'}\ell=\sum_{\text{已处理}}e^{s-m'}$ ✓,加上新块正好是"以 $m'$ 为基准的完整分母";$o$ 同理 ✓ —— 这就是 Q27 的"望远镜求和" ✓
+- **形状再强调**:$m,\ell\in\mathbb{R}^{B\times H\times B_r}$(每个 query 行一个值),$o\in\mathbb{R}^{B\times H\times B_r\times d_h}$;而 $\mathrm{attn}$ 从不以 $[B,H,T,T]$ 的形式存在 ✓
 
 ---
 
