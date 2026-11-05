@@ -18,6 +18,10 @@
   - 来源:Lecture 05 全篇(28 条 `#TODO` 有 18 条集中在这一块);它是后续 L06(GPU 编程)与 L07/L08(分布式)的前置。
   - 建议资源:本笔记 `lecture_05.md` 的 ① A–D 四节 + 文末「补充 1/2」(统一账本、tiling 与波量化公式);[How to Scale Your Model: GPUs](https://jax-ml.github.io/scaling-book/gpus/);Horace He《Making Deep Learning Go Brrrr》;CUDA Mode 入门系列。仍缺的部分:**occupancy / 用性能计数器实测**(留到 Assignment 2 动手时补)。
 
+- **scaling law 的拟合与口径:log-log 回归、带地板项的函数形式、IsoFLOPs 与 joint fit、参数/数据计数口径**。
+  - 来源:Lecture 09 P43–P53(joint scaling law、Chinchilla 的三种拟合方法、Kaplan vs Chinchilla 的差异原因)与 Assignment 3 的幂律拟合;答疑时发现"同一条 law 换口径就换结论"是最容易忽略的一点。
+  - 建议资源:Chinchilla(arXiv 2203.15556)§3–4 的三种方法 + Besiroglu et al. 2024(arXiv 2404.10102)对 method 3 的复现;自己动手:在 numpy 里对 $(N,D,L)$ 网格做带地板项的最小二乘,再比较 IsoFLOPs 与 joint fit 得到的指数是否一致。
+
 ## B 延后
 - 幂律拟合与对数空间回归(log-log)。
   - 来源:Lecture 01 scaling laws 小实验 → Assignment 3 拟合 Chinchilla 型幂律;到 P4/Assignment 3 阶段补即可。
@@ -62,6 +66,15 @@
   - 来源:Lecture 04 P19(expert parallel)、P44-P46(MoE 并行 / 块稀疏 GEMM / LatentMoE),以及后续 Lecture 07-08(仓库里 `lecture_07.py` 的 "building blocks of distributed communication/computation" + "distributed training"、`lecture_08.pdf` 的 "Parallelism basics");答疑时发现这是“能看懂图、但说不清机制”的典型缺口。
   - 建议资源(按顺序):本课程 L05(GPUs) → L06 → L07 → L08;The Ultra-Scale Playbook(HuggingFace nanotron);How to Scale Your Model(jax-ml);Lil'Log《How to Train Really Large Models on Many GPUs?》;论文 Megatron-LM(1909.08053)/ GPipe(1811.06965)/ ZeRO(1910.02054)/ GShard(2006.16668,EP 与 all-to-all 的源头)。详细链接清单 + DeepSeek/Megatron 真实源码摘录见 `lecture_04.md` 的 Q11 追问与附录 ✓
 
+- **随机梯度噪声与 critical batch:noise scale = trΣ/‖G‖²、双曲线模型与 batch 选择**。
+  - 来源:Lecture 09 P37–P39(critical batch、$B_{\mathrm{crit}}=E_{\min}/S_{\min}$、$B_{\mathrm{crit}}$ 随 loss 的幂律)。
+  - 建议资源:McCandlish et al. 2018(arXiv 1812.06162)§2–3;能自己推出 $S=S_{\min}(1+B_{\mathrm{crit}}/B)$ 与 $E=E_{\min}(1+B/B_{\mathrm{crit}})$、并说清它和"梯度信噪比"的关系即可。
+- **非参数回归的 minimax rate 与"内在维度"**:$n^{-\beta/(2\beta+d)}$、$n^{-1/d}$ 的来历与局限。
+  - 来源:Lecture 09 P16–P20(均值估计 $1/n$、格子划分 $n^{-1/d}$、Bahri 2021 的内在维度解释)。
+  - 建议资源:非参数统计教材(Wasserman《All of Nonparametric Statistics》第 5–6 章)或 Stone 1982 的经典结果;重点搞清"光滑性 $\beta$ 与维度 $d$ 如何共同决定指数"。
+- **计算最优 vs 部署最优:训练 FLOPs 与推理 FLOPs 的联合成本模型(over-train)**。
+  - 来源:Lecture 09 P45–P54(Chinchilla 的 20 tokens/param 与 Llama 3 的 215 tokens/param 的差别)。
+  - 建议资源:Chinchilla §4 + 近年 over-training scaling law 的工作;自己写一个 $C_{\mathrm{tot}}=6ND+2NU$ 的小脚本,看 $U$ 变大时最优 $N$ 如何左移。
 ## C 放弃 / 降级
 
 (空)
