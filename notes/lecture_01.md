@@ -136,8 +136,8 @@ SwiGLU主要讲的是啥？
       y = h @ W2                  # 第二段不变
       ```
     - **参数量 / FLOPs 的“配平”(为什么要缩 $d_{ff}$)**:原版 2 个矩阵、SwiGLU 3 个矩阵,若 $d_{ff}$ 不变参数量会涨 50%。工程上把 $d_{ff}$ 编到 $\frac23\cdot4d=\frac83d\approx2.67d$:
-      - 参数:原版 $2d\,d_{ff}=8d^2$;SwiGLU $3d\!\cdot\!\frac83d=8d^2$ ✓ 相等;
-      - 每 token FLOPs:原版 $4d\,d_{ff}=16d^2$;SwiGLU $6d\!\cdot\!\frac83d=16d^2$ ✓ 相等。
+      - 参数:原版 $2d\,d_{ff}=8d^2$;SwiGLU $3d\!\cdot\!\frac83d=8d^2$ 相等;
+      - 每 token FLOPs:原版 $4d\,d_{ff}=16d^2$;SwiGLU $6d\!\cdot\!\frac83d=16d^2$ 相等。
       - 这就是讲义 P23 “Gated models use smaller dimensions for the $d_{ff}$ by 2/3” 与 P38 表里 2.5~3.5 那些数字的来源(LLaMA-2 3.5、Qwen/DeepSeek 2.67 等)。
     - **逐单元数值对比**(取余下一个 hidden 单元:$z=xW_1$ 的分量、$g=xV$ 的分量):
 
@@ -248,7 +248,7 @@ $\frac{\text{attention 二次部分}}{\text{MLP}}=\frac{4Ld}{16d^2}=\frac{L}{4d}
 - **固定上下文 $L$、把 $d$ 调大** → MLP 的 $d^2$ 涨得快、attention 的 $Ld$ 涨得慢 → **attention 占比下降**(Lecture 01 里“MLP 占总 FLOPs 比例随规模上升”的画面);
 - 反过来,长上下文把 $L$ 拉大 → attention 重新变成大头。两个旋钮方向相反,这就是该看“目标规模 + 目标上下文”而非小模型直觉的原因。
 
-**与 $6ND$ 账本的对账(很好的自检)**:每层参数量 $N_{\text{layer}}=4d^2$(attention 的 $QKVO$)$+8d^2$(MLP)=$12d^2$;前向 $2N$/token → 每 token $24d^2$ → 每层 $24Ld^2$。而上面推的“线性部分”$8Ld^2+16Ld^2(\text{MLP})=24Ld^2$ ✓ **完全吻合**。也就是说:$6ND$ 账本恰好只统计了这些线性项,$\boxed{4L^2d}$ 的注意力二次项被它**略掉了**——这正是 Lecture 02 那句 caveat“**短上下文时 $6ND$ 是好近似**”的精确含义:只有 $4L^2d\ll 24Ld^2$,即 $L\ll 6d$ 时才成立;上下文一长,必须在账本里补回二次项。
+**与 $6ND$ 账本的对账(很好的自检)**:每层参数量 $N_{\text{layer}}=4d^2$(attention 的 $QKVO$)$+8d^2$(MLP)=$12d^2$;前向 $2N$/token → 每 token $24d^2$ → 每层 $24Ld^2$。而上面推的“线性部分”$8Ld^2+16Ld^2(\text{MLP})=24Ld^2$ **完全吻合**。也就是说:$6ND$ 账本恰好只统计了这些线性项,$\boxed{4L^2d}$ 的注意力二次项被它**略掉了**——这正是 Lecture 02 那句 caveat“**短上下文时 $6ND$ 是好近似**”的精确含义:只有 $4L^2d\ll 24Ld^2$,即 $L\ll 6d$ 时才成立;上下文一长,必须在账本里补回二次项。
 
 **decode(KV cache)单步版本**:每生成一个新 token——$Q_{1\times d}@K_{\text{cache}}^\top{}_{d\times L}$ → $2Ld$;$(1\times L)@V_{L\times d}$ → $2Ld$;合计 $4Ld=O(Ld)$。与 prefill 的“每 token 分摊”一致:**$O(Ld)$ 这个量级在两个阶段都成立**;区别在形状——prefill 的两个二次矩阵乘是**大 GEMM**(compute-bound,GPU 容易吃满),decode 是 **GEMV**(memory-bound,带宽吃紧),这就是 Lecture 02/03 里 roofline 与 P60 的差别来源。
 
@@ -307,7 +307,7 @@ $\frac{\text{attention 二次部分}}{\text{MLP}}=\frac{4Ld}{16d^2}=\frac{L}{4d}
   | 函数 | 输出 | 和 |
   |---|---|---|
   | sigmoid | [0.731, 0.881, 0.953] | 2.565(≠1) |
-  | softmax | [0.090, 0.245, 0.665] | 1.000 ✓ |
+  | softmax | [0.090, 0.245, 0.665] | 1.000 |
 
 - **注意力里的具体例子**:$B{=}2,h{=}8,L{=}3$ 时,分数张量 $[2,8,3,3]$,softmax 沿最后一维 → 每个 $(b,h)$ 的 3×3 矩阵**每行和为 1**(每个 query 对 3 个 key 的注意力权重);若换成逐元素 sigmoid,每行和不为 1、也不再是“权重分配”。
 - 一句话记:**sigmoid/ReLU/GeLU/Swish = 逐元素、各管各;softmax = 沿维归一化、互相争抢**。两者常同时出现:FFN 里用逐元素(或门控),attention 与输出层用 softmax。

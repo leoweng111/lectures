@@ -84,9 +84,9 @@
     - **为什么 ③ 等于 ①(这就是"推导")**:先看状态的定义式
       $S_t=\sum_{i=1}^{t}k_iv_i^\top$,
       其中 $k_iv_i^\top$ 是 $d_k\times d_v$ 的**外积**,意为"把这一对 key-value 写进记忆表"。把求和拆出最后一项:
-      $S_t=\sum_{i\le t-1}k_iv_i^\top+k_tv_t^\top=S_{t-1}+k_tv_t^\top$ ✓
+      $S_t=\sum_{i\le t-1}k_iv_i^\top+k_tv_t^\top=S_{t-1}+k_tv_t^\top$
       再看输出:
-      $y_t=q_t^\top S_t=q_t^\top\sum_{i\le t}k_iv_i^\top=\sum_{i\le t}\bigl(q_t^\top k_i\bigr)v_i^\top$ ✓ 与 ① 逐项相同(标量 $q_t^\top k_i$ 可以提到求和里)。
+      $y_t=q_t^\top S_t=q_t^\top\sum_{i\le t}k_iv_i^\top=\sum_{i\le t}\bigl(q_t^\top k_i\bigr)v_i^\top$ 与 ① 逐项相同(标量 $q_t^\top k_i$ 可以提到求和里)。
       实测($n=5,d_k=3,d_v=2$):并行因果形式与递推形式的最大差 $4.4\times10^{-16}$(就是浮点舍入)。
     - **一个必须注意的坑**:讲义 P4 那条重排 $QK^\top V=Q(K^\top V)$ 是**双向(非因果)**版本——把整段的 $K^\top V$ 一次算好,等价于"每个位置都能看到未来"。**因果 LM 不能这么用**,必须用**前缀状态** $S_t=\sum_{i\le t}k_iv_i^\top$ 增量累加。实测同一组数据下,非因果版与因果版的最大差达 2.9(完全是两个东西)。这也解释了"训练要并行"该怎么办:用 **chunkwise / prefix-scan**——把序列切块,块内用矩阵形式、块间用递推把状态传下去。
     - **复杂度账**(单头、$n$ 个 token):直接算 $(QK^\top)V$ 需要 $n^2d_k+n^2d_v$ 次乘加;重排成 $Q(K^\top V)$ 只要 $2nd_kd_v$ —— 对 $n$ **线性**。实测 $n=5,d_k=3,d_v=2$:125 次 → 60 次。
@@ -98,7 +98,7 @@
     - **与 KV cache 的三个本质区别**:
       - **大小**:KV cache 随序列长度线性增长($O(T\cdot H d_h)$ 个元素);状态是**常数**($O(Hd_kd_v)$ 个元素,与 $T$ 无关),$L$ 层合计也是常数;
       - **语义**:KV cache 是"把历史**原样存下来**"(无损,能回看任意位置);状态是"把历史**压成一个矩阵**"(有损压缩,容量 $\sim d$——见 ③ 里新增的那一问);
-      - **访存/瓶颈**:KV cache 每步要读回 $O(Td)$ 字节(这正是 decode memory-bound 的来源);状态每步只读写 $O(d_kd_v)$ 字节(常数)⇒ 长上下文 decode 不再是 memory-bound ✓。
+      - **访存/瓶颈**:KV cache 每步要读回 $O(Td)$ 字节(这正是 decode memory-bound 的来源);状态每步只读写 $O(d_kd_v)$ 字节(常数)⇒ 长上下文 decode 不再是 memory-bound 。
     - **训练 vs 推理**:训练用**并行/chunkwise** 形式,不需要"跨 step 的递推状态"参与反向(chunk 边界存少量状态检查点、chunk 内重算即可);真正需要维护状态的是**推理(decode)**。
     - **一句话**:线性注意力把"缓存整段历史"换成了"缓存一个固定大小的状态"——**KV cache 消失、状态缓存出现**,而且这个状态是每步都要改写的"活记忆"。
 
@@ -142,7 +142,7 @@
   - 出处:DeepSeek-V3.2 技术报告,[arXiv:2512.02556](https://arxiv.org/abs/2512.02556)(公式即其式 (1)(2))。
   - **追问(2026-10-10)｜把 indexer 公式逐项拆开:$q$、$w$、$k$ 各是什么、什么形状、怎么得到的?**
     - **公式(论文式 (1))**:$I_{t,s}=\sum_{j=1}^{H^I}w^I_{t,j}\cdot\mathrm{ReLU}\bigl(q^I_{t,j}\cdot k^I_s\bigr)$。先注意记号:上标 $I$(讲义幻灯片写作 $l$)只是标记"这属于 indexer",**不是指数/幂**;$I_{t,s}$ 是分数(index score),别和单位矩阵混淆。
-    - **先用标准张量形状对齐记号**:设本层输入为 $X\in\mathbb R^{B\times T\times d}$(单样本就是 $T\times d$),$X_t$ 表示第 $t$ 行的 $d$ 维向量。那么 **$h_t=X_t$**(当前正在处理的位置 $t$ 那一行),**$h_s=X_s$**,其中 $s$ 取遍**当前 token 能看到的历史位置**——因果下 $0\le s\le t$(含自身;论文里的 "preceding" 是宽泛措辞;如果你想只指"之前那些 token",写成 $s\lt t$ 即可)✓。
+    - **先用标准张量形状对齐记号**:设本层输入为 $X\in\mathbb R^{B\times T\times d}$(单样本就是 $T\times d$),$X_t$ 表示第 $t$ 行的 $d$ 维向量。那么 **$h_t=X_t$**(当前正在处理的位置 $t$ 那一行),**$h_s=X_s$**,其中 $s$ 取遍**当前 token 能看到的历史位置**——因果下 $0\le s\le t$(含自身;论文里的 "preceding" 是宽泛措辞;如果你想只指"之前那些 token",写成 $s\lt t$ 即可)。
 
       | 符号 | 形状(单样本) | 含义 | 从哪来 |
       | --- | --- | --- | --- |
@@ -152,20 +152,20 @@
       | $k^I_s$ | $d^I$ | 历史位置 $s$ 的 indexer key | 由 $h_s$ 投影得到,**所有 indexer 头共享同一份**(MQA 式) |
       | $I_{t,s}$ | 标量 | 该 $(t,s)$ 对的索引分数 | 上式算出,供 top-k 选择 |
 
-    - **批形状(实现视角)**:$q^I\in\mathbb R^{B\times T\times H^I\times d^I}$(每个位置、每个头一个低维 query)、$w^I\in\mathbb R^{B\times T\times H^I}$(每个位置、每个头一个标量权重)、$k^I\in\mathbb R^{B\times T\times d^I}$(**不带头维**,因为所有头共享)、分数 $I\in\mathbb R^{B\times T\times T}$(第 $[b,t,s]$ 个元素是 token $t$ 看 token $s$ 的分数);top-k 沿最后一维取,并屏蔽 $s\gt t$ ✓。
+    - **批形状(实现视角)**:$q^I\in\mathbb R^{B\times T\times H^I\times d^I}$(每个位置、每个头一个低维 query)、$w^I\in\mathbb R^{B\times T\times H^I}$(每个位置、每个头一个标量权重)、$k^I\in\mathbb R^{B\times T\times d^I}$(**不带头维**,因为所有头共享)、分数 $I\in\mathbb R^{B\times T\times T}$(第 $[b,t,s]$ 个元素是 token $t$ 看 token $s$ 的分数);top-k 沿最后一维取,并屏蔽 $s\gt t$ 。
 
-    - **这个式子在做什么**:对每个头算一个**低维内积相似度** $q^I_{t,j}\cdot k^I_s$ → 过 ReLU → 按标量权重 $w$ 加权求和 ⇒ **"多个子空间相似度的加权和"**;产出的 $I_{t,:}$ 就是"当前 token 对每个历史位置的关注优先级"✓。
+    - **这个式子在做什么**:对每个头算一个**低维内积相似度** $q^I_{t,j}\cdot k^I_s$ → 过 ReLU → 按标量权重 $w$ 加权求和 ⇒ **"多个子空间相似度的加权和"**;产出的 $I_{t,:}$ 就是"当前 token 对每个历史位置的关注优先级"。
     - **为什么这么设计(四个取舍)**:
       - **ReLU 而不是 exp**:① 非负 ⇒ 分数可叠加、不需要 softmax 的分母开销;② 吞吐(论文原话 for throughput consideration);③ FP8 友好;
       - **多头 + 每头一个标量权重 $w$**:单个相似度表达力太弱;多个头看不同子空间,再用**数据相关的权重**组合 ⇒ 更强的相关性判别能力;
       - **key 在所有头间共享(MQA 式)**:indexer 的 key cache 只需"每 token 一个 $d^I$ 维向量"(而不是 $H^I$ 份)⇒ 长上下文下预填/解码都便宜;
       - **少头 + 低维 + FP8**:indexer 本身是一次 $O(L^2)$ 的预扫描,必须**远便宜于主注意力**(否则省不下来)——这就是 Q9 里那个"常数决定成败"的来源。
     - **每个量到底怎么得到的(两条线)**
-      - **前向**:$(\{q^I_{t,j}\},\{w^I_{t,j}\})=f^I_Q(h_t)$、$k^I_s=f^I_K(h_s)$——就是两个**轻量线性投影**;历史侧的 $k^I_s$ 单独缓存 ✓。
+      - **前向**:$(\{q^I_{t,j}\},\{w^I_{t,j}\})=f^I_Q(h_t)$、$k^I_s=f^I_K(h_s)$——就是两个**轻量线性投影**;历史侧的 $k^I_s$ 单独缓存 。
       - **训练(这才是 DSA 最巧的地方)**:从 V3.1-Terminus 的 128K checkpoint 出发做**两阶段继续训练**——
-        - **阶段 1 Dense Warm-up(初始化 indexer)**:保持**稠密注意力**,冻结除 indexer 外的全部参数;把主注意力分数**跨头求和**、再沿序列维 **L1 归一化**得到目标分布 $p_{t,:}$,用 **KL 损失**把 indexer 输出对齐到它:$\mathcal L^I=\sum_t D_{\mathrm{KL}}\bigl(p_{t,:}\,\|\,\mathrm{Softmax}(I_{t,:})\bigr)$;lr $10^{-3}$、1000 步 × 16 条 × 128K = **2.1B token** ✓;
-        - **阶段 2 Sparse Training(全模型适应稀疏模式)**:引入 top-k 选择,优化全部参数;仍然对齐,但**只在被选中的集合** $S_t$ 上算 KL;且 **indexer 的输入被 detach**(从计算图断开)⇒ **indexer 只由 $\mathcal L^I$ 优化、主模型只由 LM loss 优化**(解耦训练);lr $7.3\times10^{-6}$、15000 步 × 480 条 × 128K = **943.7B token**,每 query 选 **$k=2048$** 个 KV ✓。
-    - **为什么用 detach 而不是端到端**(讲义 P13 那张表就是这个问题):detach 侧训练稳(梯度不经"离散 top-k")、但 indexer 不是任务感知的,上界受 indexer 限制;端到端目标统一(只有 LM loss)、理论天花板更高,但要处理**离散选择的梯度**问题(STE / RL),稳定性差 ✓——这正是讲义注里说的"MoE 路由面临的是同一个问题"(对照 Q20-Q24)✓。
+        - **阶段 1 Dense Warm-up(初始化 indexer)**:保持**稠密注意力**,冻结除 indexer 外的全部参数;把主注意力分数**跨头求和**、再沿序列维 **L1 归一化**得到目标分布 $p_{t,:}$,用 **KL 损失**把 indexer 输出对齐到它:$\mathcal L^I=\sum_t D_{\mathrm{KL}}\bigl(p_{t,:}\,\|\,\mathrm{Softmax}(I_{t,:})\bigr)$;lr $10^{-3}$、1000 步 × 16 条 × 128K = **2.1B token** ;
+        - **阶段 2 Sparse Training(全模型适应稀疏模式)**:引入 top-k 选择,优化全部参数;仍然对齐,但**只在被选中的集合** $S_t$ 上算 KL;且 **indexer 的输入被 detach**(从计算图断开)⇒ **indexer 只由 $\mathcal L^I$ 优化、主模型只由 LM loss 优化**(解耦训练);lr $7.3\times10^{-6}$、15000 步 × 480 条 × 128K = **943.7B token**,每 query 选 **$k=2048$** 个 KV 。
+    - **为什么用 detach 而不是端到端**(讲义 P13 那张表就是这个问题):detach 侧训练稳(梯度不经"离散 top-k")、但 indexer 不是任务感知的,上界受 indexer 限制;端到端目标统一(只有 LM loss)、理论天花板更高,但要处理**离散选择的梯度**问题(STE / RL),稳定性差 ——这正是讲义注里说的"MoE 路由面临的是同一个问题"(对照 Q20-Q24)。
 
 **Q8 追问补充：前向伪代码(带详细形状注释)**
 
@@ -244,24 +244,24 @@ o     = merge_heads(o) @ W_o                              # [B, T, d]       回�
   - **训练与推理都用**:训练时 EP 是主流(MoE 层用 EP、注意力层用 TP/DP);推理时常把专家**全部驻留**在显存里、按 token 动态路由(或按热点专家做缓存/分卡),EP 主要解决"放不下"。
   - **系统代价**:负载不均会直接拖慢 all-to-all(最慢设备决定时间),通信量随 token 数与 top-k 增长 ⇒ 这正是 P41-p46 那些平衡与通信优化的动机。
   - **追问(2026-10-13)｜P19"Parallelizable to many devices"到底在讲什么?EP 的细节(数据/跨卡/梯度/all-to-all)**
-    - **先解读 P19 那张图**(我把这页渲染出来核对过。原图是 GShard 那一路的经典画法):图分三栏,左栏是"单卡上的 MoE Encoder",中/右栏是同一个模型放到 **Device 1 … Device E**。两处关键标注——① 底部写 "Input embeddings + Positional embeddings **(shard 1)**/(shard E)"、顶部写 "Encoder output **(shard i)**" ⇒ **图里的 shard 指的是"输入数据的分片"**,每个设备各吃一份;② MoE 层里 **FFN1 放 Device 1、FFN2 放 Device E**(旁边标 "Model-parallel"),两者之间是 **All-to-All Dispatch / Combine** ⇒ 这才是**专家并行**。所以这张图画的是"**数据并行(每卡一份数据) × 专家并行(专家分到不同卡)**"的混合,而不是"只并行专家"✓
-    - **① EP 并行了什么、要不要数据并行**:并行对象是**专家(FFN 子模块)的参数**;非 MoE 组件(embedding/attention/norm/门控)每卡各一份或走 TP/PP。**数据要并行**:每卡各吃一份分片 ⇒ 实际部署几乎都是 "DP/TP + EP" 的组合 ✓
+    - **先解读 P19 那张图**(我把这页渲染出来核对过。原图是 GShard 那一路的经典画法):图分三栏,左栏是"单卡上的 MoE Encoder",中/右栏是同一个模型放到 **Device 1 … Device E**。两处关键标注——① 底部写 "Input embeddings + Positional embeddings **(shard 1)**/(shard E)"、顶部写 "Encoder output **(shard i)**" ⇒ **图里的 shard 指的是"输入数据的分片"**,每个设备各吃一份;② MoE 层里 **FFN1 放 Device 1、FFN2 放 Device E**(旁边标 "Model-parallel"),两者之间是 **All-to-All Dispatch / Combine** ⇒ 这才是**专家并行**。所以这张图画的是"**数据并行(每卡一份数据) × 专家并行(专家分到不同卡)**"的混合,而不是"只并行专家"
+    - **① EP 并行了什么、要不要数据并行**:并行对象是**专家(FFN 子模块)的参数**;非 MoE 组件(embedding/attention/norm/门控)每卡各一份或走 TP/PP。**数据要并行**:每卡各吃一份分片 ⇒ 实际部署几乎都是 "DP/TP + EP" 的组合
     - **② 两种主流 EP 实现**(决定"每卡放多少数据"、也是你困惑的根源):
-      - **(a) all-reduce 式(DeepSeek 官方推理代码 `inference/model.py`)**:每卡持有**全部 token 的激活** + **一部分专家**;各卡只算自己那份专家、把部分结果写进 `y`,最后 **`dist.all_reduce(y)` 求和** ⇒ 每卡都得到完整输出。代码见下方附录 ①(专家按 `rank * n_local_experts` 分片、`all_reduce` 在 `MoE.forward` 末尾、共享专家的 `z` **不参与** reduce)✓
-      - **(b) all-to-all 式(训练/大规模:GShard → Megatron)**:每卡只有**自己那份 token**(`num_local_tokens = S/TP*B`);先算门控 → **all-to-all dispatch** 把 token 激活送到专家所在卡 → 算完 **all-to-all combine** 送回来。代码见附录 ③(含 7 步流程与 `input_splits`/`output_splits`)✓
+      - **(a) all-reduce 式(DeepSeek 官方推理代码 `inference/model.py`)**:每卡持有**全部 token 的激活** + **一部分专家**;各卡只算自己那份专家、把部分结果写进 `y`,最后 **`dist.all_reduce(y)` 求和** ⇒ 每卡都得到完整输出。代码见下方附录 ①(专家按 `rank * n_local_experts` 分片、`all_reduce` 在 `MoE.forward` 末尾、共享专家的 `z` **不参与** reduce)
+      - **(b) all-to-all 式(训练/大规模:GShard → Megatron)**:每卡只有**自己那份 token**(`num_local_tokens = S/TP*B`);先算门控 → **all-to-all dispatch** 把 token 激活送到专家所在卡 → 算完 **all-to-all combine** 送回来。代码见附录 ③(含 7 步流程与 `input_splits`/`output_splits`)
     - **③ 你的具体场景**(token1 在卡1、专家 expert1 在卡1、expert2 在卡2):
-      - **(a) all-reduce 式**:卡2 也持有 token1 的激活 ⇒ 卡1 算 expert1 的贡献、卡2 算 expert2 的贡献,`all_reduce` 后两卡都把两部分加起来 ✓。代价是**激活冗余**(每卡都是全量激活),但实现最简单、没有 dispatch 的调度;
-      - **(b) all-to-all 式**:卡1 把 token1 的激活**发给卡2**(dispatch),卡2 算完 expert2 再**发回卡1**(combine),卡1 按门控权重与 expert1 的输出相加 ✓。代价是通信(但只传"需要跨卡的 token"),换来**激活不冗余** ✓
-    - **④ 非 MoE 组件怎么并行 = TP(真实代码见附录 ②)**:`ColumnParallelLinear` 按**输出维**切(每卡算自己那段、无通信);`RowParallelLinear` 按**输入维**切、forward 里 **`dist.all_reduce(y)`** 求和。于是 MLP/注意力的投影写成"列并行 → 激活 → 行并行",**每次只在行并行处做一次 all_reduce** ✓(MLA 的 q/kv 投影同理:列并行 + 行并行输出投影)
+      - **(a) all-reduce 式**:卡2 也持有 token1 的激活 ⇒ 卡1 算 expert1 的贡献、卡2 算 expert2 的贡献,`all_reduce` 后两卡都把两部分加起来 。代价是**激活冗余**(每卡都是全量激活),但实现最简单、没有 dispatch 的调度;
+      - **(b) all-to-all 式**:卡1 把 token1 的激活**发给卡2**(dispatch),卡2 算完 expert2 再**发回卡1**(combine),卡1 按门控权重与 expert1 的输出相加 。代价是通信(但只传"需要跨卡的 token"),换来**激活不冗余**
+    - **④ 非 MoE 组件怎么并行 = TP(真实代码见附录 ②)**:`ColumnParallelLinear` 按**输出维**切(每卡算自己那段、无通信);`RowParallelLinear` 按**输入维**切、forward 里 **`dist.all_reduce(y)`** 求和。于是 MLP/注意力的投影写成"列并行 → 激活 → 行并行",**每次只在行并行处做一次 all_reduce** (MLA 的 q/kv 投影同理:列并行 + 行并行输出投影)
     - **⑤ 梯度要不要共享、怎么共享**(按并行类型):
       - **DP**:每卡有完整副本 ⇒ 反向各卡得本地梯度 → **all-reduce(求和/平均)** 同步(框架里就是 DDP 的梯度 bucket,或 FSDP/ZeRO 的 reduce-scatter);
-      - **TP**:前向在行并行处 all-reduce ⇒ 反向对应的是"**把上游梯度原样发回每个 rank**"(因 y 是求和,∂L/∂y_r = ∂L/∂y)。注意 **torch 的集合通信本身不可导**,训练时要自己写 autograd Function(前向 all-reduce、反向恒等)或用框架封装——这也是上面推理代码能直接写 `dist.all_reduce` 的原因:推理不需要反向 ✓
+      - **TP**:前向在行并行处 all-reduce ⇒ 反向对应的是"**把上游梯度原样发回每个 rank**"(因 y 是求和,∂L/∂y_r = ∂L/∂y)。注意 **torch 的集合通信本身不可导**,训练时要自己写 autograd Function(前向 all-reduce、反向恒等)或用框架封装——这也是上面推理代码能直接写 `dist.all_reduce` 的原因:推理不需要反向
       - **PP**:只在流水线边界传激活/梯度(微批次);
-      - **EP**:每个专家只有**一份副本** ⇒ **专家参数本身不需要跨卡同步梯度** ✓;跨卡传的是"被 dispatch 出去的 token 的激活与其梯度";但**门控是按 token 决策的**,EP 下每卡只看得到自己的 token ⇒ 门控参数的梯度需要跨卡 all-reduce(实现上就是把门控/共享专家当作"数据并行"的参量来同步)✓
-      - **ZeRO/FSDP**:把优化器状态/梯度/参数**分片**(reduce-scatter + all-gather),本质是"用通信换显存"。DeepSeek-MoE 仓库里的 finetune 配置正是这套:`finetune/configs/ds_config_zero2_no_offload.json`、`ds_config_zero3.json` ✓
-    - **⑥ all-to-all 到底是什么**:它是集合通信原语——**每个 rank 把不同的数据块发给每一个其它 rank,同时从每个 rank 收到不同的块**(对比:all-gather 是人人收到**相同**的全体数据;reduce-scatter 是把求和结果**按 rank 分片**发回)。PyTorch 接口:`torch.distributed.all_to_all_single(output, input, output_split_sizes, input_split_sizes)`;在 MoE 里它有两个用途:**dispatch**(按 token 排布 → 按专家排布)与 **combine**(算完 → 还原成按 token 排布)✓。Megatron 代码里要传 `input_splits`/`output_splits` 两个数组,就是因为 all-to-all **必须知道"给每个对端发多少、从每个对端收多少"**(发送量 = 本卡各专家收到的 token 数;接收量 = 各 rank 发给我负责的专家的 token 数)✓
-    - **⑦ 学习资料**:先看**本课程后续讲座**(顺序天然就是从单卡到分布式:L05 GPUs → L06 hardware/programming model → **L07 分布式通信/计算积木 + 分布式训练** → **L08 Parallelism basics**),再看附录末尾的并行/分布式训练外链清单 ✓
-    - **⚠️ 关于你指的 `deepseek-ai/DeepSeek-MoE` 仓库**:我把它 clone 下来看了——**里面只有 `finetune/`(含 DeepSpeed ZeRO-2/3 配置)、`DeepSeekMoE.pdf`(论文)、README 与权重说明,没有模型/并行实现代码**(开源的只有权重 + 微调脚本 + 论文)✗。所以"结合真实代码"我改用两个官方来源:**DeepSeek-V3 官方推理仓库的 `inference/model.py`**(门控/专家/EP/TP 真实实现,附录 ①②)与 **Megatron-LM 的 `token_dispatcher.py`**(EP + all-to-all 标准实现,附录 ③)✓
+      - **EP**:每个专家只有**一份副本** ⇒ **专家参数本身不需要跨卡同步梯度** ;跨卡传的是"被 dispatch 出去的 token 的激活与其梯度";但**门控是按 token 决策的**,EP 下每卡只看得到自己的 token ⇒ 门控参数的梯度需要跨卡 all-reduce(实现上就是把门控/共享专家当作"数据并行"的参量来同步)
+      - **ZeRO/FSDP**:把优化器状态/梯度/参数**分片**(reduce-scatter + all-gather),本质是"用通信换显存"。DeepSeek-MoE 仓库里的 finetune 配置正是这套:`finetune/configs/ds_config_zero2_no_offload.json`、`ds_config_zero3.json`
+    - **⑥ all-to-all 到底是什么**:它是集合通信原语——**每个 rank 把不同的数据块发给每一个其它 rank,同时从每个 rank 收到不同的块**(对比:all-gather 是人人收到**相同**的全体数据;reduce-scatter 是把求和结果**按 rank 分片**发回)。PyTorch 接口:`torch.distributed.all_to_all_single(output, input, output_split_sizes, input_split_sizes)`;在 MoE 里它有两个用途:**dispatch**(按 token 排布 → 按专家排布)与 **combine**(算完 → 还原成按 token 排布)。Megatron 代码里要传 `input_splits`/`output_splits` 两个数组,就是因为 all-to-all **必须知道"给每个对端发多少、从每个对端收多少"**(发送量 = 本卡各专家收到的 token 数;接收量 = 各 rank 发给我负责的专家的 token 数)
+    - **⑦ 学习资料**:先看**本课程后续讲座**(顺序天然就是从单卡到分布式:L05 GPUs → L06 hardware/programming model → **L07 分布式通信/计算积木 + 分布式训练** → **L08 Parallelism basics**),再看附录末尾的并行/分布式训练外链清单
+    - **⚠️ 关于你指的 `deepseek-ai/DeepSeek-MoE` 仓库**:我把它 clone 下来看了——**里面只有 `finetune/`(含 DeepSpeed ZeRO-2/3 配置)、`DeepSeekMoE.pdf`(论文)、README 与权重说明,没有模型/并行实现代码**(开源的只有权重 + 微调脚本 + 论文)✗。所以"结合真实代码"我改用两个官方来源:**DeepSeek-V3 官方推理仓库的 `inference/model.py`**(门控/专家/EP/TP 真实实现,附录 ①②)与 **Megatron-LM 的 `token_dispatcher.py`**(EP + all-to-all 标准实现,附录 ③)
 
 **Q11 追问补充：真实源码摘录（DeepSeek-V3 官方推理 + Megatron EP）**
 
@@ -381,7 +381,7 @@ permutated_local_input_tokens = all_to_all(
 ```
 
 **延伸阅读（数据并行 / 模型并行 / 多卡训练，按推荐顺序）**
-- **本课程（最优先）**:`lecture_05.pdf`（GPUs）→ `lecture_06.py`（hardware / programming model）→ **`lecture_07.py`（Part 1: building blocks of distributed communication/computation;Part 2: distributed training）** → **`lecture_08.pdf`（Parallelism basics）** ✓
+- **本课程（最优先）**:`lecture_05.pdf`（GPUs）→ `lecture_06.py`（hardware / programming model）→ **`lecture_07.py`（Part 1: building blocks of distributed communication/computation;Part 2: distributed training）** → **`lecture_08.pdf`（Parallelism basics）**
 - **长文教程**:The Ultra-Scale Playbook（HuggingFace nanotron 团队）[huggingface.co/spaces/nanotron/ultrascale-playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook) —— 有 DP/TP/PP/CP/EP 的完整推导与**通信量实测对比**;[中文教程](https://github.com/pprp/ultrascale-playbook-zh/tree/main/docs); How to Scale Your Model（jax-ml）[jax-ml.github.io/scaling-book](https://jax-ml.github.io/scaling-book/);Lil'Log《How to Train Really Large Models on Many GPUs?》[lilianweng.github.io/posts/2021-09-25-train-large](https://lilianweng.github.io/posts/2021-09-25-train-large/)
 - **官方文档**:PyTorch 分布式总览与 all_to_all 接口 [pytorch.org/docs/stable/distributed.html](https://pytorch.org/docs/stable/distributed.html);DDP 教程 [pytorch.org/tutorials/intermediate/ddp_tutorial.html](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html);FSDP 教程 [pytorch.org/tutorials/intermediate/FSDP_tutorial.html](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html);HuggingFace《Efficient Training on Multiple GPUs》[huggingface.co/docs/transformers/perf_train_gpu_many](https://huggingface.co/docs/transformers/perf_train_gpu_many)
 - **论文（按这个顺序读）**:张量并行 Megatron-LM [arXiv:1909.08053](https://arxiv.org/abs/1909.08053);流水线并行 GPipe [arXiv:1811.06965](https://arxiv.org/abs/1811.06965);ZeRO [arXiv:1910.02054](https://arxiv.org/abs/1910.02054);**专家并行 + all-to-all 的源头 GShard [arXiv:2006.16668](https://arxiv.org/abs/2006.16668)**（P19 那张图就是这一路）;Switch Transformer（§2.2 讲 EP）[arXiv:2101.03961](https://arxiv.org/abs/2101.03961);DeepSpeed-MoE [arXiv:2201.05596](https://arxiv.org/abs/2201.05596)
@@ -406,14 +406,14 @@ permutated_local_input_tokens = all_to_all(
     优点:每个专家恰好处理 c 个 token ⇒ **天然均衡**;缺点:① token 可能一个专家都没选中(需要兜底);② "谁被选中"依赖同批次其他 token ⇒ 破坏"逐 token 因果性"、也要小心评测一致性。
   - **③ global routing(全局优化)**:把整批的"token→专家"分配写成一个**全局匹配/线性规划**问题求解(见 Q15)。
   - **数值例子**(4 专家,$k=1$):token A 分数 $[0.9,0.1,0.05,0.02]$,token B 分数 $[0.05,0.95,0.2,0.1]$。
-    - token-choice:A→E1、B→E2,负载均衡 ✓;
+    - token-choice:A→E1、B→E2,负载均衡 ;
     - 若 B 的分数是 $[0.95,0.05,0.2,0.1]$(A、B 都最爱 E1):token-choice 会把**两个都塞给 E1**(E2-E4 闲置,若设容量 1 则有一个 token 被丢弃);expert-choice 在 E1 容量 1 时按分数选 B、A 落到次优专家 ⇒ **天然不爆仓**。
   - **追问(2026-10-13)｜MoE 一般是 per-token 的吗?token 之间的专家共享吗?讲义怎么描述的?**
-    - **是 per-token 的,但要精确:共享的是"参数池",不共享的只是"选择"**。每个 token(严格说是每个**位置**)独立算门控分数、独立选自己的 top-k;同一句里不同 token 的专家组合一般不同 ✓。但**专家本身是被所有 token 复用的参数模块**——"token 之间不共享专家"这个说法只在"路由选择"这一层成立 ✓。
-    - **讲义的逐页依据**:P15"多个大 FFN + 一个 selector 层";P25"典型做法是替换 MLP(少数是替换 attention heads)";P27 三族路由 + "many routing algorithms boil down to 'choose top k'";**P28"Almost all the MoEs do a standard 'token choice topk' routing"**(← 对本问题的直接回答);P29 各家 k 值(Switch 1、Gshard 2、Mixtral 2、Qwen 4、DeepSeek 7);P31 门控 = logistic regressor,且 "Mixtral, DBRX, DeepSeek v3 softmaxes after the TopK";**P32"a few shared experts that are always on"**(DeepSeek/Qwen)⇒ **共享专家确实被所有 token 使用,不是 per-token**;P35 表头 Routed / Active / Shared(v3 = 256 routed、**8 active**、1 shared)✓。
+    - **是 per-token 的,但要精确:共享的是"参数池",不共享的只是"选择"**。每个 token(严格说是每个**位置**)独立算门控分数、独立选自己的 top-k;同一句里不同 token 的专家组合一般不同 。但**专家本身是被所有 token 复用的参数模块**——"token 之间不共享专家"这个说法只在"路由选择"这一层成立 。
+    - **讲义的逐页依据**:P15"多个大 FFN + 一个 selector 层";P25"典型做法是替换 MLP(少数是替换 attention heads)";P27 三族路由 + "many routing algorithms boil down to 'choose top k'";**P28"Almost all the MoEs do a standard 'token choice topk' routing"**(← 对本问题的直接回答);P29 各家 k 值(Switch 1、Gshard 2、Mixtral 2、Qwen 4、DeepSeek 7);P31 门控 = logistic regressor,且 "Mixtral, DBRX, DeepSeek v3 softmaxes after the TopK";**P32"a few shared experts that are always on"**(DeepSeek/Qwen)⇒ **共享专家确实被所有 token 使用,不是 per-token**;P35 表头 Routed / Active / Shared(v3 = 256 routed、**8 active**、1 shared)。
     - **三个容易混的点**:① 共享的是参数、不共享的是选择,而且**梯度是按"有多少 token 路由到我"聚合的** ⇒ 这正是"不做平衡就强者恒强"的机制(呼应 Q21);② **共享专家是 always-on**(所有 token 都过),承担通用知识;③ **实现是批量的**(一次算完整批路由 → 按专家 permutation 分组 → 块稀疏 GEMM):"per-token"是语义、"批量"是实现(呼应 Q26/P45)。
     - **不是 per-token 的例外**(P27/P28/P30):**expert chooses token**(每专家挑固定数量 token,天然均衡但依赖同批其它 token);**global routing / 线性分配**(整批解匹配);**hashing**(仍逐 token 但内容无关,只作基线)。另有"按序列/按组共享路由"的工程变体(为推理时专家缓存局部性),非主流、讲义未提。
-    - **一句话**:主流 MoE = **共享专家池 + 每 token 独立选 top-k(routed)+ 少数 always-on 共享专家**;说"per-token"指路由决策,说"共享"指专家参数 ✓。
+    - **一句话**:主流 MoE = **共享专家池 + 每 token 独立选 top-k(routed)+ 少数 always-on 共享专家**;说"per-token"指路由决策,说"共享"指专家参数 。
 
 - [x] **Q14(p29)｜hashing 路由具体指什么?怎么做?**
   > 原问(还原):hashing 具体指的是啥?如何做的?
@@ -434,19 +434,19 @@ permutated_local_input_tokens = all_to_all(
   - **为什么选它**:① 计算量相对专家前向可忽略(只有 $N\times d$ 个参数);② $e_i$ 有清晰的几何解释(专家方向);③ 便于加"负载偏置"做 aux-loss-free 平衡(见 Q24)。
   - 出处:DeepSeekMoE(Dai et al. 2024),[arXiv:2401.06066](https://arxiv.org/abs/2401.06066)。
   - **追问(2026-10-13)｜用 $[B,T,C]$ 把 top-k 专家网络的门控流程走一遍(形状逐步变)**
-    - **记号与超参**(用 DeepSeek-V3 671B 的真实推理配置 `inference/configs/config_671B.json`):输入 $x\in\mathbb R^{B\times T\times C}$;$N=B\cdot T$ 为 token 总数;$C=7168$;$N_{exp}=256$;$k=8$;$G=8$(组数)、$k_g=4$(选几组);$d_{moe}=2048$(单专家隐藏维);$n_{shared}=1$;route_scale $=2.5$;score_func $=$ sigmoid ✓
-    - **① 展平**:$(B,T,C)\to(N,C)$(实现上就是 `x.view(-1, C)`,只为方便"按 token"处理)✓
-    - **② 门控打分(单层线性 = 内积门控)**:$s=xW_g^\top$,$W_g\in\mathbb R^{N_{exp}\times C}$ ⇒ $s\in\mathbb R^{N\times N_{exp}}$(每个 token 对 256 个专家各一个分数)✓
-    - **③ 激活**:sigmoid(V1-V2 是 softmax)⇒ 形状不变 $(N,N_{exp})$;**同时把"原始分数"记下来**,后面取权重用它 ✓
-    - **④ 路由偏置(V3 的 aux-loss-free)**:$s_{sel}=s+b$,$b\in\mathbb R^{N_{exp}}$ 广播 ⇒ $(N,N_{exp})$;**偏置只给"选择"用的分数,不进最终权重** ✓
-    - **⑤ 分组路由(8 组选 4 组)**:reshape 成 $(N,G,N_{exp}/G)=(N,8,32)$ ⇒ 每组取"组内最高两个分数之和"作为组分数 $(N,8)$ ⇒ 取 top-$k_g=4$ 组 ⇒ 把**未选中组的专家置 $-\infty$** ⇒ 展平回 $(N,N_{exp})$ ✓(好处:以"组/设备"为单位更均衡,直接对接 EP 的通信与负载)
-    - **⑥ top-k 选择**:在 $s_{sel}$ 上取 top-$k=8$ ⇒ 索引 $(N,8)$;权重从**原始分数** gather ⇒ $(N,8)$ ✓
-    - **⑦ 归一化 + 缩放**:sigmoid 时把选中的 8 个权重**除以它们的和**(和为 1),再乘 route_scale $=2.5$ ⇒ $(N,8)$ ✓
-    - **⑧ 按专家计算并加权累加**:对每个本地专家 $i$,取出路由到它的 token $x[\text{idx}]\in\mathbb R^{cnt_i\times C}$ → 过专家(SwiGLU:$W_1,W_3:C\to d_{moe}$,$W_2:d_{moe}\to C$)⇒ $(cnt_i,C)$ → 乘以各自的 $(cnt_i,1)$ 权重、累加到输出 ⇒ $y\in\mathbb R^{N\times C}$ ✓
-    - **关于 $cnt_i$(伪代码里用到)**:$cnt_i$ := **路由到专家 $i$ 的 token 个数**。它有三个要记住的点:① **守恒** $\sum_i cnt_i=N\cdot k$(每个 token 贡献 $k$ 个名额),均衡时平均 $Nk/N_{exp}$(例:$N=4096,k=8,N_{exp}=256$ ⇒ 平均 128);② **数据相关、逐 batch 变化** ⇒ 每个专家拿到的是【**变长**】张量——MoE 的四大实现难题(permute/分组、容量与丢 token、块稀疏 GEMM、负载均衡)全都因它而起;③ 真实代码里它就叫 `counts[i] = torch.bincount(indices.flatten())[i]`(因 top-k 互不重复,等于路由到该专家的 token 数),而且 **EP 下这个数组就是 all-to-all 的 `input_splits`**(见 Q11 附录 ③)✓
-    - **⑨ 加共享专家**:$z=\mathrm{MLP}_{shared}(x)$,内部宽度 $n_{shared}\cdot d_{moe}=2048$ ⇒ $(N,C)$;$y\leftarrow y+z$ ✓
-    - **⑩ 还原形状 + EP 汇总**:view 回 $(B,T,C)$;若开了 EP,对 $y$(路由部分)做 `dist.all_reduce` 把各卡部分结果相加 ✓(共享专家的 $z$ **不参与**,否则会被乘上 world_size)
-    - **一句话**:门控做的全部事情就是"**$(N,C)$ → $(N,256)$ 打分 → 选 8 个 → 得到 $(N,8)$ 的索引与权重**";剩下的都是"按索引把 token 送到专家、再把结果按权重加起来" ✓
+    - **记号与超参**(用 DeepSeek-V3 671B 的真实推理配置 `inference/configs/config_671B.json`):输入 $x\in\mathbb R^{B\times T\times C}$;$N=B\cdot T$ 为 token 总数;$C=7168$;$N_{exp}=256$;$k=8$;$G=8$(组数)、$k_g=4$(选几组);$d_{moe}=2048$(单专家隐藏维);$n_{shared}=1$;route_scale $=2.5$;score_func $=$ sigmoid
+    - **① 展平**:$(B,T,C)\to(N,C)$(实现上就是 `x.view(-1, C)`,只为方便"按 token"处理)
+    - **② 门控打分(单层线性 = 内积门控)**:$s=xW_g^\top$,$W_g\in\mathbb R^{N_{exp}\times C}$ ⇒ $s\in\mathbb R^{N\times N_{exp}}$(每个 token 对 256 个专家各一个分数)
+    - **③ 激活**:sigmoid(V1-V2 是 softmax)⇒ 形状不变 $(N,N_{exp})$;**同时把"原始分数"记下来**,后面取权重用它
+    - **④ 路由偏置(V3 的 aux-loss-free)**:$s_{sel}=s+b$,$b\in\mathbb R^{N_{exp}}$ 广播 ⇒ $(N,N_{exp})$;**偏置只给"选择"用的分数,不进最终权重**
+    - **⑤ 分组路由(8 组选 4 组)**:reshape 成 $(N,G,N_{exp}/G)=(N,8,32)$ ⇒ 每组取"组内最高两个分数之和"作为组分数 $(N,8)$ ⇒ 取 top-$k_g=4$ 组 ⇒ 把**未选中组的专家置 $-\infty$** ⇒ 展平回 $(N,N_{exp})$ (好处:以"组/设备"为单位更均衡,直接对接 EP 的通信与负载)
+    - **⑥ top-k 选择**:在 $s_{sel}$ 上取 top-$k=8$ ⇒ 索引 $(N,8)$;权重从**原始分数** gather ⇒ $(N,8)$
+    - **⑦ 归一化 + 缩放**:sigmoid 时把选中的 8 个权重**除以它们的和**(和为 1),再乘 route_scale $=2.5$ ⇒ $(N,8)$
+    - **⑧ 按专家计算并加权累加**:对每个本地专家 $i$,取出路由到它的 token $x[\text{idx}]\in\mathbb R^{cnt_i\times C}$ → 过专家(SwiGLU:$W_1,W_3:C\to d_{moe}$,$W_2:d_{moe}\to C$)⇒ $(cnt_i,C)$ → 乘以各自的 $(cnt_i,1)$ 权重、累加到输出 ⇒ $y\in\mathbb R^{N\times C}$
+    - **关于 $cnt_i$(伪代码里用到)**:$cnt_i$ := **路由到专家 $i$ 的 token 个数**。它有三个要记住的点:① **守恒** $\sum_i cnt_i=N\cdot k$(每个 token 贡献 $k$ 个名额),均衡时平均 $Nk/N_{exp}$(例:$N=4096,k=8,N_{exp}=256$ ⇒ 平均 128);② **数据相关、逐 batch 变化** ⇒ 每个专家拿到的是【**变长**】张量——MoE 的四大实现难题(permute/分组、容量与丢 token、块稀疏 GEMM、负载均衡)全都因它而起;③ 真实代码里它就叫 `counts[i] = torch.bincount(indices.flatten())[i]`(因 top-k 互不重复,等于路由到该专家的 token 数),而且 **EP 下这个数组就是 all-to-all 的 `input_splits`**(见 Q11 附录 ③)
+    - **⑨ 加共享专家**:$z=\mathrm{MLP}_{shared}(x)$,内部宽度 $n_{shared}\cdot d_{moe}=2048$ ⇒ $(N,C)$;$y\leftarrow y+z$
+    - **⑩ 还原形状 + EP 汇总**:view 回 $(B,T,C)$;若开了 EP,对 $y$(路由部分)做 `dist.all_reduce` 把各卡部分结果相加 (共享专家的 $z$ **不参与**,否则会被乘上 world_size)
+    - **一句话**:门控做的全部事情就是"**$(N,C)$ → $(N,256)$ 打分 → 选 8 个 → 得到 $(N,8)$ 的索引与权重**";剩下的都是"按索引把 token 送到专家、再把结果按权重加起来"
 
 **Q16 追问补充：门控 + top-k 专家的形状流伪代码**
 
@@ -527,12 +527,12 @@ def moe_forward(x, W_gate, b_gate, local_experts, shared_mlp, world_size, rank):
 
 **Q16 追问补充二：为什么“按专家去找 token”，而不是“按 token 去找专家”？**
 
-- **一句话**：路由的**决策**是 token-major(每个 token 选自己的 8 个专家)，但**执行**必须是 expert-major(把要去专家 $i$ 的 token 聚成一批再做 GEMM)，最后再 scatter 回 token-major。这不是两种路由方式，而是同一件事的“决策层 / 执行层” ✓
+- **一句话**：路由的**决策**是 token-major(每个 token 选自己的 8 个专家)，但**执行**必须是 expert-major(把要去专家 $i$ 的 token 聚成一批再做 GEMM)，最后再 scatter 回 token-major。这不是两种路由方式，而是同一件事的“决策层 / 执行层”
 - **为什么执行层必须按专家组织**：
   - **权重属于专家**：专家 $i$ 有自己的 $W_1^{(i)},W_2^{(i)},W_3^{(i)}$，要算它就必须凑出“一批 token × 同一个权重矩阵”的 GEMM 形状；
   - 若按“每个 token 把自己的 8 个专家都算一遍” ⇒ 变成 $8N$ 次 $1\times C$ 的小乘(GEMV 级)，**同样的 FLOPs，墙钟时间可能差一个数量级** ✗；
   - EP 下**专家住在特定设备上** ⇒ 发数据也只能按专家聚合后再 all-to-all(见 Q11 附录 ③)；
-  - 这正是 Q26(块稀疏 / grouped GEMM)与 Q28(容量 / 丢 token)存在的根本原因 ✓
+  - 这正是 Q26(块稀疏 / grouped GEMM)与 Q28(容量 / 丢 token)存在的根本原因
 - **两层怎么对接(形状链)**：
 
   | 阶段 | 操作 | 形状 |
@@ -543,7 +543,7 @@ def moe_forward(x, W_gate, b_gate, local_experts, shared_mlp, world_size, rank):
   | 执行(expert-major) | 专家 $i$ 的区间 `[off[i], off[i+1])`，长度 = $cnt_i$；逐专家(或 grouped)GEMM | `[cnt_i, C]` |
   | 收回(token-major) | `y.index_add_(0, flat_t[perm], out * flat_w[perm, None])` | `[N, C]` |
 
-- **三个要点**：① 中间的张量是 $[Nk,C]$，而**不是** $[N,C]$ —— 每个 token 的激活被**复制 $k$ 份**(k 个专家各要一份)；② `flat_t` 是“逆置换的钥匙”，记录每个 slot 属于哪个 token；③ 整条链的守恒量就是 $\sum_i cnt_i=Nk$ ✓
+- **三个要点**：① 中间的张量是 $[Nk,C]$，而**不是** $[N,C]$ —— 每个 token 的激活被**复制 $k$ 份**(k 个专家各要一份)；② `flat_t` 是“逆置换的钥匙”，记录每个 slot 属于哪个 token；③ 整条链的守恒量就是 $\sum_i cnt_i=Nk$
 
 ```python
 # ===== 决策(token-major) → 展开/分组 → 执行(expert-major) → 收回(token-major) =====
@@ -649,7 +649,7 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
   - **背景**:MoE 里每个 token 只去 $k$ 个专家 ⇒ 计算图天然是**块稀疏**的(行 = token,列 = 专家)。朴素实现有两条烂路:① 按"每专家容量"把 token 补齐到固定形状再算 ⇒ 大量 padding 白算;② 先 permutation 把同专家的 token 聚在一起,再对每个专家单独发一个 GEMM ⇒ 小 kernel 一大堆、启动开销吃掉收益。
   - **做法(MegaBlocks,Gale et al. 2022)**:用 **block-sparse GEMM / grouped GEMM**——一次 kernel 处理"变长分组"的 token,直接跳过没有 token 的块,既省 padding 又省 kernel 启动,还支持动态容量(**不丢 token**)。
   - 一句话:MoE 的瓶颈常在**数据搬运与 kernel 效率**,而不是算术量;块稀疏 GEMM 就是为它定制的算子。参考:Gale et al. 2022,[arXiv:2211.15841](https://arxiv.org/abs/2211.15841)。
-  - **提示:它其实就是 Q16 里那段伪代码的“工程优化版”**。「Q16 追问补充二」里的链路——展开成 slot → 按专家排序分组(`argsort` + `bincount`/`cumsum` 得到区间 `[off[i], off[i+1])`)→ 逐专家取 `[cnt_i, C]` 做 GEMM → 逆置换收回——就是本页说的**朴素实现**(也就是上面那两条“烂路”的 ②);而 **block-sparse / grouped GEMM 就是把这同一条链里的“逐专家小 GEMM”融合成一次 kernel**:直接把 `off`(各专家区间与长度)当“变长分组”喂进去,不用补 padding、也不用发 $N_{exp}$ 个小 kernel ⇒ 这就是“为 MoE 定制的算子” ✓(而“烂路 ①”的 padding/容量问题见 Q28)
+  - **提示:它其实就是 Q16 里那段伪代码的“工程优化版”**。「Q16 追问补充二」里的链路——展开成 slot → 按专家排序分组(`argsort` + `bincount`/`cumsum` 得到区间 `[off[i], off[i+1])`)→ 逐专家取 `[cnt_i, C]` 做 GEMM → 逆置换收回——就是本页说的**朴素实现**(也就是上面那两条“烂路”的 ②);而 **block-sparse / grouped GEMM 就是把这同一条链里的“逐专家小 GEMM”融合成一次 kernel**:直接把 `off`(各专家区间与长度)当“变长分组”喂进去,不用补 padding、也不用发 $N_{exp}$ 个小 kernel ⇒ 这就是“为 MoE 定制的算子” (而“烂路 ①”的 padding/容量问题见 Q28)
 
 - [x] **Q27(p46)｜"把激活下投影以减少通信"这页到底在讲什么?**
   > 原问(还原):这页完全没看懂。
@@ -666,13 +666,13 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
   - **后果**:① 被丢的 token **这一层等于没算 FFN**(质量受损);② 引入**批级随机性**——某个 token 进不进得去,取决于同批次其他人的 query(讲义 P47 的吐槽:"other people's queries can drop your token!"),导致同一条输入在不同 batch 下结果不同、不可复现。
   - **现在怎么做到 drop-less**:靠 ① 块稀疏/grouped GEMM 允许**变长分组**(Q26),② permutation/动态容量让形状随实际负载变化,③ 用路由偏置(aux-loss-free)+合理的容量因子把负载压均衡 ⇒ 容量不再是"硬闸门",而只是一个监控/调节指标。
   - **追问(2026-10-13)｜"token drop 是 batch-level 的"到底什么意思?别人的样本为什么会影响到我?**
-    - **关键在容量的分母**:Switch 原文的公式是 $\text{expert capacity}=\bigl(\frac{\text{tokens per batch}}{\text{number of experts}}\bigr)\times\text{capacity factor}$(原文式 (3))—— 这里的 **"tokens per batch" 是整个 batch 的 token 总数($B\cdot T$,按 top-k 计还要乘 $k$),不是单条样本的 $T$** ✓。所以**同一个 batch 里所有样本共享每个专家的那块容量池**:别人样本的 token 先把专家 $i$ 的位置占满,轮到你的 token 就没位置了 ⇒ 被丢弃 ✓ —— 这就是"batch-level"的确切含义(讲义 P47 那句吐槽正是这个意思)✓
-    - **你的直觉在什么时候成立**:若 batch 里**只有你一条序列**($B=1$),容量就只由你自己的 token 决定 ⇒ 你只会被"自己句子里的热门 token"挤(长 prompt 内部也会相互抢),与别人无关 ✓。会出问题的是:① 训练时一个 batch 塞进很多条样本(或拼包);② 推理时服务端用 **continuous batching** 把不同用户的请求动态拼进同一个 batch ⇒ 你的输出取决于"此刻同批里别人的请求" ✓
-    - **为什么实现上必须按整批分配固定容量**:Switch 原文说得很直白——"all of our tensor shapes are statically determined at compilation time, but our computation is dynamic due to the routing decisions"。为了让每个专家的输入是**固定形状**(才能用规整的 GEMM 与静态显存),只能在编译期按 batch 预先切好每个专家的缓冲 ⇒ 容量池天然是"整批共享"的 ✓
-    - **被丢的 token 会怎样**:原文——"computation is skipped and the token representation is passed directly to the next layer through the residual connection" ⇒ **这一层的 MoE 输出相当于 0,信息全靠残差带过去** ✓(所以丢 token 是"少过一次变换",不是把 token 删掉)
-    - **两层后果要分开看**:**数值层**——被丢的 token 少过一次专家 ⇒ 你的输出变了,且随同批其他人变化 ⇒ **同一 prompt 两次结果可能不同、不可复现**;**服务层**——即使不丢,负载不均也会让整批等最慢的专家/设备 ⇒ **延迟也被别人影响** ✓
-    - **现状**:主流已用块稀疏 GEMM + 动态容量做到 **drop-less**(正文第三点)⇒ **数值上不再互相干扰**;但"性能上互相影响"依然存在(负载不均 ⇒ 通信/等待),所以平衡损失与路由偏置仍然是必需的 ✓
-    - 参考:Switch Transformer,[arXiv:2101.03961](https://arxiv.org/abs/2101.03961) §2.2(式 (3) 与丢 token 的处理;容量因子经验值 1.0~1.25、典型丢弃率不到 1%)✓
+    - **关键在容量的分母**:Switch 原文的公式是 $\text{expert capacity}=\bigl(\frac{\text{tokens per batch}}{\text{number of experts}}\bigr)\times\text{capacity factor}$(原文式 (3))—— 这里的 **"tokens per batch" 是整个 batch 的 token 总数($B\cdot T$,按 top-k 计还要乘 $k$),不是单条样本的 $T$** 。所以**同一个 batch 里所有样本共享每个专家的那块容量池**:别人样本的 token 先把专家 $i$ 的位置占满,轮到你的 token 就没位置了 ⇒ 被丢弃 —— 这就是"batch-level"的确切含义(讲义 P47 那句吐槽正是这个意思)
+    - **你的直觉在什么时候成立**:若 batch 里**只有你一条序列**($B=1$),容量就只由你自己的 token 决定 ⇒ 你只会被"自己句子里的热门 token"挤(长 prompt 内部也会相互抢),与别人无关 。会出问题的是:① 训练时一个 batch 塞进很多条样本(或拼包);② 推理时服务端用 **continuous batching** 把不同用户的请求动态拼进同一个 batch ⇒ 你的输出取决于"此刻同批里别人的请求"
+    - **为什么实现上必须按整批分配固定容量**:Switch 原文说得很直白——"all of our tensor shapes are statically determined at compilation time, but our computation is dynamic due to the routing decisions"。为了让每个专家的输入是**固定形状**(才能用规整的 GEMM 与静态显存),只能在编译期按 batch 预先切好每个专家的缓冲 ⇒ 容量池天然是"整批共享"的
+    - **被丢的 token 会怎样**:原文——"computation is skipped and the token representation is passed directly to the next layer through the residual connection" ⇒ **这一层的 MoE 输出相当于 0,信息全靠残差带过去** (所以丢 token 是"少过一次变换",不是把 token 删掉)
+    - **两层后果要分开看**:**数值层**——被丢的 token 少过一次专家 ⇒ 你的输出变了,且随同批其他人变化 ⇒ **同一 prompt 两次结果可能不同、不可复现**;**服务层**——即使不丢,负载不均也会让整批等最慢的专家/设备 ⇒ **延迟也被别人影响**
+    - **现状**:主流已用块稀疏 GEMM + 动态容量做到 **drop-less**(正文第三点)⇒ **数值上不再互相干扰**;但"性能上互相影响"依然存在(负载不均 ⇒ 通信/等待),所以平衡损失与路由偏置仍然是必需的
+    - 参考:Switch Transformer,[arXiv:2101.03961](https://arxiv.org/abs/2101.03961) §2.2(式 (3) 与丢 token 的处理;容量因子经验值 1.0~1.25、典型丢弃率不到 1%)
 
 - [x] **Q29(p48)｜MoE 的稳定性问题是什么?为什么"路由器用 FP32(+ z-loss)"能解决?**
   > 原问(还原):这里提到的问题和解决方式?
@@ -720,15 +720,15 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
   - **一句话总括**:线性注意力把"整段前缀的注意力矩阵"压成了**两个低秩因子的乘积** $A=\phi(Q)\phi(K)^\top$,并把历史压进一个**固定大小的状态** $d_k\times d_v$——所以注意力矩阵的秩上界是 $d'$、状态的容量 $\sim d$;一旦要存的 key-value 对超过容量,就必然互相干扰(memory collision)。
   - **先补一句:$A=\phi(Q)\phi(K)^\top$ 是怎么来的、$\phi$ 是什么(以及与讲义 P4 的对应)**
     - **讲义 P4 写的是** $\mathrm{Attn}(Q,K,V)=\rho(QK^\top)V$,并说"当 $\rho$ 是恒等映射"时就可以重排 $QK^\top V=Q(K^\top V)$——也就是**不做 softmax** 的版本(该页引用里也标了 "for kernel version":Shen 2018、Katharopoulos 2020)。
-    - **一般写法把 $\rho$ 换成"可分解的相似度"**:$\mathrm{sim}(q,k)=\phi(q)^\top\phi(k)$,于是 $A=\rho(QK^\top)$ 变成 $A=\phi(Q)\phi(K)^\top$——**讲义那页就是 $\phi=\mathrm{id}$(恒等映射)的特例** ✓(此时 $A=QK^\top$)。
+    - **一般写法把 $\rho$ 换成"可分解的相似度"**:$\mathrm{sim}(q,k)=\phi(q)^\top\phi(k)$,于是 $A=\rho(QK^\top)$ 变成 $A=\phi(Q)\phi(K)^\top$——**讲义那页就是 $\phi=\mathrm{id}$(恒等映射)的特例** (此时 $A=QK^\top$)。
     - **$\phi$ 叫"特征映射"**:把每个 $q,k\in\mathbb R^{d_k}$ 映到 $\mathbb R^{d'}$。常见选择:恒等(讲义情形)、ReLU、$\mathrm{elu}(\cdot)+1$、$\exp$。想让 $A$ 直接当"权重"用需要 $\phi\ge0$;取恒等时 $A$ 里可能有负值,讲义用它只是为了说明"重排"这件事。
     - **为什么必须能分解**(这才是线性注意力的起点):注意力本质是 $y_i=\sum_j\mathrm{sim}(q_i,k_j)\,v_j$。只有 $\mathrm{sim}$ 能写成内积,才能把对 $j$ 的求和**移到里面**:
       $y_i=\phi(q_i)^\top\Bigl(\sum_j\phi(k_j)v_j^\top\Bigr)=\phi(q_i)^\top S$,其中 $S=\phi(K)^\top V\in\mathbb R^{d'\times d_v}$ **与 $n$ 无关**——这就是"线性"的来源;$A=\phi(Q)\phi(K)^\top$ 只是把同一件事写成矩阵形式(实测:$(A)V$ 与 $\phi(Q)(\phi(K)^\top V)$ 完全相等,差 $3.6\times10^{-15}$)。
     - **与 softmax 的距离**:softmax 的核 $\mathrm{sim}=\exp(q^\top k)$ 需要**无穷维**特征映射才能精确分解(Taylor 展开),有限维 $\phi$ 只能近似(Performer 用随机特征逼近)⇒ 这也是一条"表达力下降"的来源——**你只能在一个有限维子空间里度量相似度**。
     - **两个视角别混淆:$A=\phi(Q)\phi(K)^\top$ 只用于"分析",实现里从不把它算出来**(你问的这一点)。它是**概念上的注意力矩阵**——只有写出来才能谈秩/自由度/表达力(见下面 ①);而**真正的计算顺序是"先合 KV、后用 Q"**:
       $S=\phi(K)^\top V\in\mathbb R^{d'\times d_v}$(代价 $n d'd_v$)→ $O=\phi(Q)S\in\mathbb R^{n\times d_v}$(代价 $n d'd_v$)。
-      两者相等靠的是矩阵结合律:$\bigl(\phi(Q)\phi(K)^\top\bigr)V=\phi(Q)\bigl(\phi(K)^\top V\bigr)$ ✓(实测差 $1.8\times10^{-15}$)。因果版本同理:$S_t=\sum_{i\le t}\phi(k_i)v_i^\top$ 只累加 K/V 侧,$q_t$ 只在读取时出现 —— 所以**"Q 和 K 相乘"只出现在讲"表达力"那一步(概念分析),不出现在实现里** ✓。
-    - **代价对比**(实测 MACs,$d'=d_v=128$):$n=512$ 时 $6.7\times10^7$ vs $1.7\times10^7$(4×)、$n=4096$ 时 $4.3\times10^9$ vs $1.3\times10^8$(**32×**)、$n=32768$ 时 256×;反过来,当 $n\lt 2d'd_v/(d'+d_v)\approx d'$(本例约 128)时,物化 $A$ 反而更便宜 ⇒ **"线性注意力"只在长序列($n\gtrsim d'$)才划算** ✓。
+      两者相等靠的是矩阵结合律:$\bigl(\phi(Q)\phi(K)^\top\bigr)V=\phi(Q)\bigl(\phi(K)^\top V\bigr)$ (实测差 $1.8\times10^{-15}$)。因果版本同理:$S_t=\sum_{i\le t}\phi(k_i)v_i^\top$ 只累加 K/V 侧,$q_t$ 只在读取时出现 —— 所以**"Q 和 K 相乘"只出现在讲"表达力"那一步(概念分析),不出现在实现里** 。
+    - **代价对比**(实测 MACs,$d'=d_v=128$):$n=512$ 时 $6.7\times10^7$ vs $1.7\times10^7$(4×)、$n=4096$ 时 $4.3\times10^9$ vs $1.3\times10^8$(**32×**)、$n=32768$ 时 256×;反过来,当 $n\lt 2d'd_v/(d'+d_v)\approx d'$(本例约 128)时,物化 $A$ 反而更便宜 ⇒ **"线性注意力"只在长序列($n\gtrsim d'$)才划算** 。
   - **① 表达力下降的精确来源:注意力矩阵被迫低秩**
     - 线性注意力(kernel 形式):$A=\phi(Q)\phi(K)^\top$,其中 $\phi(Q),\phi(K)\in\mathbb R^{n\times d'}$。由秩不等式 $\mathrm{rank}(UV^\top)\le\min(\mathrm{rank}U,\mathrm{rank}V)$ 得 $\mathrm{rank}(A)\le\min(n,d')$——**关键是有个与 $n$ 无关的上界 $d'$**(实践里 $d'$ 取头维 $d_h$ 或与它同量级;讲义 $\phi=\mathrm{id}$ 时 $A=QK^\top$ 且 $d'=d_k$)。
     - **顺带把"秩"说清楚(定义 + 直观)——这是理解"表达力/容量"的钥匙**
@@ -737,15 +737,15 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
       - **直观 2:秩 1 = 一个外积**。$kv^\top$ 的每一行都是 $v^\top$ 的倍数(实测 $4\times3$ 外积的秩 = 1,任意两行逐元素比完全一致);反过来,任何秩 1 矩阵都能写成一列乘一行。所以 $S=\sum_ik_iv_i^\top$ 就是"把若干个秩 1 的块叠起来"——**秩的上限就是能叠加的独立块数**。
       - **直观 3:低秩 = "通道被卡脖子"**。$A=UV^\top$ 意味着"所有输出都必须由 $U$ 的 $r$ 个方向拼出来" ⇒ 无论 $n$ 多大,表达能力都被压在这 $r$ 维里。对注意力矩阵:$A\in\mathbb R^{n\times n}$ 有 $n^2$ 个数,softmax 版秩可达 $n$,而线性注意力 $\mathrm{rank}\le d'$ ⇒ 当 $n\gt d'$ 时**必然存在它表示不出的注意力图案**(例如"把第 1、3、5…个位置分别挑出来、各自配任意权重")。
       - **数值读法**:秩 = 非零奇异值个数(实测 $6\times3$ 随机矩阵秩 3,奇异值 $3.293,1.864,1.234$ 全非零);实际中还要看奇异值谱的"有效秩"(能量/参与比),因为极小的奇异值虽非零但影响有限。
-      - **对状态容量的直接含义**(呼应下面 ②):$S=\sum_{i\le t}k_iv_i^\top$ 的秩 $\le\min(d_k,d_v)$,**与 $t$ 无关**。实测:存 10 对时 rank = 3(状态 $4\times3$)、存 100 对时 rank = 8(状态 $8\times8$)、存 **4096 对时 rank 仍然只有 64**(状态 $64\times64$)——即状态最多只能"独立地"记住 $\min(d_k,d_v)$ 对关联,再多的只能重叠(碰撞)✓
+      - **对状态容量的直接含义**(呼应下面 ②):$S=\sum_{i\le t}k_iv_i^\top$ 的秩 $\le\min(d_k,d_v)$,**与 $t$ 无关**。实测:存 10 对时 rank = 3(状态 $4\times3$)、存 100 对时 rank = 8(状态 $8\times8$)、存 **4096 对时 rank 仍然只有 64**(状态 $64\times64$)——即状态最多只能"独立地"记住 $\min(d_k,d_v)$ 对关联,再多的只能重叠(碰撞)
     - softmax 注意力:$A=\mathrm{softmax}(S)$ 可以是**任意正的行归一化矩阵**——给定任意正矩阵 $T$,取 $S=\log T$ 即得 $\mathrm{softmax}(S)=T/\text{rowsum}(T)$(即每行除以该行之和),也就是 $n^2$ 个自由度、秩可达 $n$。
-    - 实测($n=6,d'=3$):softmax 注意力秩 = 6,线性注意力秩 = 3 ✓。**"自由度 $n^2$ vs $nd'$"就是表达力差距的矩阵层面表述**。
+    - 实测($n=6,d'=3$):softmax 注意力秩 = 6,线性注意力秩 = 3 。**"自由度 $n^2$ vs $nd'$"就是表达力差距的矩阵层面表述**。
   - **② memory collision 的精确机制:检索时多出一个互扰项**
     - 状态 $S=\sum_{i=1}^{t}k_iv_i^\top$ 就是一张关联记忆。用第 $j$ 个 key 去检索:
       $k_j^\top S=\|k_j\|^2v_j^\top+\sum_{i\ne j}(k_j^\top k_i)v_i^\top$ —— **第一项是信号**(要取回的 $v_j$),**第二项是互扰**(其它 key-value 对混进来的干扰,cross-talk)
       (实测这个拆分与直接计算一致,差 $10^{-15}$)。
     - **要精确取回 $v_j$ 就必须让互扰项为 0 ⇒ 要求所有 key 两两正交**;而 $d_k$ 维空间里最多只有 $d_k$ 个互相正交的向量 ⇒ **容量上界 $\sim d_k$**。实测:$k$ 取正交向量时检索误差**恰好为 0**;取随机 key 时误差 2~22(基本取不出来)。
-    - **互扰的量级(这就是"memory collision"的量化)**:把 key 取成单位随机向量,则 $k_j^\top k_i\approx\mathcal N(0,1/d)$,互扰是 $t$ 个独立项叠加 ⇒ 范数 $\approx\sqrt{t/d}\,\|v\|$,于是**相对检索误差 $\approx\sqrt{t/d}$**。实测($d=32$):$t/d=0.2,1,4,16,64$ 对应误差 $0.35,0.99,1.99,4.04,8.10$,与理论值 $0.50,1.00,2.00,4.00,8.00$ 基本吻合 ✓。
+    - **互扰的量级(这就是"memory collision"的量化)**:把 key 取成单位随机向量,则 $k_j^\top k_i\approx\mathcal N(0,1/d)$,互扰是 $t$ 个独立项叠加 ⇒ 范数 $\approx\sqrt{t/d}\,\|v\|$,于是**相对检索误差 $\approx\sqrt{t/d}$**。实测($d=32$):$t/d=0.2,1,4,16,64$ 对应误差 $0.35,0.99,1.99,4.04,8.10$,与理论值 $0.50,1.00,2.00,4.00,8.00$ 基本吻合 。
     - **结论**:只要 $t\gtrsim d$(序列长超过头维),检索就开始失真——这解释了为什么线性注意力在关联回忆/复制/长文档检索上明显弱,而在普通语言建模(不需要精确检索)上差距不大。
   - **③ 代价清单(完整版)**
     - **表达力**:每层注意力矩阵 $\mathrm{rank}\le d'$;状态容量 $\sim d$ ⇒ 精确检索、长程复制、in-context 取数类任务变差(靠门控/混合层补)。
@@ -760,17 +760,17 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
   - **① SSM(state space model):从控制论搬过来的标准形式**
     - 连续时间线性系统:$h'(t)=Ah(t)+Bx(t)$、$y(t)=Ch(t)+Dx(t)$;深度学习里用它的**离散化**版本:$h_t=\bar Ah_{t-1}+\bar Bx_t$、$y_t=Ch_t+Dx_t$ —— 就是一个**状态维为 $N$ 的线性递推**($N$ 与序列长度无关)。
     - **同一个层的三张面孔**(三种等价算法):① **递推**:逐步更新,每 token $O(N)$、常数状态;② **卷积**:参数时不变时 $y=x*\bar K$,核 $\bar K=(C\bar B,\ C\bar A\bar B,\ C\bar A^2\bar B,\dots)$(可用 FFT);③ **矩阵形式**:$y=Mx$,其中 $M$ 是**半可分矩阵**($M_{ij}=C_iA_i\cdots A_{j+1}B_j$ 当 $i\ge j$,否则 0)。
-    - **Mamba 系列的取舍**:Mamba-1 让 $\bar A,\bar B,C,\Delta$ **依赖输入**(selective:按内容决定记住/忘掉什么),代价是卷积形式失效、只能 scan;Mamba-2 把 $\bar A$ 简化为**标量 × 单位阵**($\alpha_tI$),于是矩阵形式变成 **1-半可分矩阵** ⇒ 可以分解成矩阵乘 ⇒ 快 2~8× ✓。
+    - **Mamba 系列的取舍**:Mamba-1 让 $\bar A,\bar B,C,\Delta$ **依赖输入**(selective:按内容决定记住/忘掉什么),代价是卷积形式失效、只能 scan;Mamba-2 把 $\bar A$ 简化为**标量 × 单位阵**($\alpha_tI$),于是矩阵形式变成 **1-半可分矩阵** ⇒ 可以分解成矩阵乘 ⇒ 快 2~8× 。
   - **② SSD(state space duality):SSM 与注意力的对偶框架**
-    - 论文标题就是《Transformers are SSMs》。SSD 用**结构化矩阵**(参数与乘法复杂度都是次二次的矩阵)做桥梁:证明 **SSM 等价于一族半可分矩阵**;把线性注意力推广成 **structured masked attention(SMA)**;再证明 **SSM 与 SMA 有大交集、互为对偶**:同一个层同时拥有"SSM 式线性形式"与"注意力式二次形式" ✓。论文还顺带证明了:**任何具备快速递推形式的核注意力,必然是一个 SSM** ✓。
-    - **最简形式的对偶**(最该记住的一条):把 $A_t$ 固定成恒等($\alpha_t=1$),SSM 就退化**正是因果线性注意力**——$B$ 当 key 投影、$C$ 当 query 投影、输入 $X$ 当 value ✓;Mamba-2 只是给这个线性注意力加了一个**标量衰减** $\alpha_t$ ✓。
-    - **对偶的二次形式**(Mamba-2 的注意力形式):$y=\bigl(L\circ QK^\top\bigr)V$,其中 $L_{ij}=a_i a_{i-1}\cdots a_{j+1}$(当 $i\ge j$),否则为 0。与标准 softmax 注意力只差两点:① **去掉了 softmax**;② 多了**逐元素乘的衰减掩码 $L$**——论文把它解释为"一种**数据相关的相对位置编码**",取代 Transformer 里启发式的位置嵌入 ✓。
+    - 论文标题就是《Transformers are SSMs》。SSD 用**结构化矩阵**(参数与乘法复杂度都是次二次的矩阵)做桥梁:证明 **SSM 等价于一族半可分矩阵**;把线性注意力推广成 **structured masked attention(SMA)**;再证明 **SSM 与 SMA 有大交集、互为对偶**:同一个层同时拥有"SSM 式线性形式"与"注意力式二次形式" 。论文还顺带证明了:**任何具备快速递推形式的核注意力,必然是一个 SSM** 。
+    - **最简形式的对偶**(最该记住的一条):把 $A_t$ 固定成恒等($\alpha_t=1$),SSM 就退化**正是因果线性注意力**——$B$ 当 key 投影、$C$ 当 query 投影、输入 $X$ 当 value ;Mamba-2 只是给这个线性注意力加了一个**标量衰减** $\alpha_t$ 。
+    - **对偶的二次形式**(Mamba-2 的注意力形式):$y=\bigl(L\circ QK^\top\bigr)V$,其中 $L_{ij}=a_i a_{i-1}\cdots a_{j+1}$(当 $i\ge j$),否则为 0。与标准 softmax 注意力只差两点:① **去掉了 softmax**;② 多了**逐元素乘的衰减掩码 $L$**——论文把它解释为"一种**数据相关的相对位置编码**",取代 Transformer 里启发式的位置嵌入 。
     - **为什么这个对偶很重要**(工程价值):① 训练用二次形式(全是 matmul + chunkwise 分块)⇒ 比 Mamba-1 的 scan 快 2~8×;② 推理用线性形式(每步 $O(1)$、状态常数)⇒ 与线性注意力同样的收益;③ 把 S4/Mamba/H3/RetNet/GLA/线性注意力等整合成同一张"结构化掩码注意力"谱系图 ⇒ "在 SSM 与 attention 之间插值"变成一个连续的设计空间。
     - **代价**:$A_t$ 从对角简化为标量、head dim 从 1 提到 64/128 ⇒ **表达力略降、换训练效率**(论文原话:slightly decreasing the expressive power in return for significant training efficiency improvements)。
   - **③ 别和 Q4 里的 "duality" 搞混**(两个不同层次的对偶)
     - **Q4 的 duality(算法层)**:同一个层有"并行矩阵形式"与"串行递推形式"两种**算法**;
-    - **SSD 的 duality(模型/函数类层)**:一**类**模型(结构化 SSM)与另一**类**(注意力变体)是**同一个东西**——它更强,说的是"某些层既能用 SSM 描述、也能用注意力描述"✓。
-    - 关系:线性注意力的"并行/串行对偶"是 SSD 的一个特例 ✓。
+    - **SSD 的 duality(模型/函数类层)**:一**类**模型(结构化 SSM)与另一**类**(注意力变体)是**同一个东西**——它更强,说的是"某些层既能用 SSM 描述、也能用注意力描述"。
+    - 关系:线性注意力的"并行/串行对偶"是 SSD 的一个特例 。
   - 参考:Mamba-2 / SSD 论文 [arXiv:2405.21060](https://arxiv.org/abs/2405.21060)(摘要、§3 半可分矩阵、§4 SMA、§5 对偶);"递推展成矩阵形式"的直观推导可在搜到的二手资料里找到那形式 $\bigl[\alpha_{i:j}\bigr]\circ(CB^\top)X$ 的下三角矩阵写法。
 - (AI 提示:本讲引出的延伸问题已整理进 [gap-list.md](gap-list.md),其中标注 A 必补的条目建议本周补齐。)
 
@@ -827,7 +827,7 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
 
 **补充 5｜平衡损失推导与 aux-loss-free 的伪代码**
 - Switch 平衡损失 $L_{\text{aux}}=\alpha N\sum_i f_iP_i$ 的求导细节:$P_i=\frac1T\sum_xp_i(x)$ ⇒ $\frac{\partial P_i}{\partial p_i(x)}=\frac1T$,又因为 $f_i$ 由 argmax 决定、求导时视为常数,于是
-  $\frac{\partial L_{\text{aux}}}{\partial p_i(x)}=\alpha Nf_i\cdot\frac1T=\frac{\alpha N}{T^2}\sum_x\mathbb 1[\arg\max p(x)=i]$ ✓(与讲义 P40 一致)
+  $\frac{\partial L_{\text{aux}}}{\partial p_i(x)}=\alpha Nf_i\cdot\frac1T=\frac{\alpha N}{T^2}\sum_x\mathbb 1[\arg\max p(x)=i]$ (与讲义 P40 一致)
 - aux-loss-free 的做法(每步或每个 batch 末执行一次,不参与反向传播):
   - 统计每个专家的接收量 $c_i$;若 $c_i$ 高于目标 ⇒ $b_i\mathrel{-}=\gamma$;若低于目标 ⇒ $b_i\mathrel{+}=\gamma$($\gamma$ 如 $10^{-3}$);
   - 选 top-k 时用 $s_{i,t}+b_i$,加权求和时用原始(或归一化后的)$s_{i,t}$。
@@ -847,9 +847,9 @@ y.index_add_(0, flat_t[perm], out * flat_w[perm, None])   # [N, C]  逆置换 + 
 - 初始化:upcycling(从 dense 复制专家 + 打散对称性 + 继续预训练)。
 
 **补充 8｜MLA 里"合并进 Q"与 RoPE 的冲突(把 Q32 的细节推一遍)**
-- 不带 RoPE:$\langle hW^Q,\ W^{UK}c^{KV}\rangle=\langle hW^QW^{UK},\ c^{KV}\rangle$,把 $W^{UK}$ 吸收进 $Q$ 的投影 ⇒ 推理时可以只缓存 $c^{KV}$、连 $K$ 都不用物化 ✓
+- 不带 RoPE:$\langle hW^Q,\ W^{UK}c^{KV}\rangle=\langle hW^QW^{UK},\ c^{KV}\rangle$,把 $W^{UK}$ 吸收进 $Q$ 的投影 ⇒ 推理时可以只缓存 $c^{KV}$、连 $K$ 都不用物化
 - 带 RoPE:$K$ 需要先乘位置相关的旋转 $R_k$,即 $\langle hW^QR_q,\ R_kW^{UK}c^{KV}\rangle=\langle hW^QR_qR_kW^{UK},\ c^{KV}\rangle$ —— $R_k$ 夹在中间且依赖位置,**无法再吸收** ✗
-- 解法:把 key 拆成"潜变量部分(不旋转)"+"少量非潜变量维度(物化后正常加 RoPE)" ⇒ 主缓存仍只是 $c^{KV}$ ✓
+- 解法:把 key 拆成"潜变量部分(不旋转)"+"少量非潜变量维度(物化后正常加 RoPE)" ⇒ 主缓存仍只是 $c^{KV}$
 
 **延伸阅读**
 - 线性注意力 / 对偶性:Linear Transformers [arXiv:2006.16236](https://arxiv.org/abs/2006.16236);RetNet;FlashAttention [arXiv:2205.14135](https://arxiv.org/abs/2205.14135)

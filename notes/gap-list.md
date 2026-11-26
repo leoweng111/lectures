@@ -64,7 +64,7 @@
   - 建议资源:3B1B 线性代数“秩 / 列空间”两集 + Gilbert Strang 的 SVD 一讲;能在 numpy 里用 svd 验证“rank = 非零奇异值个数”与“$\mathrm{rank}(UV^\top)\le r$”即可。
 - **并行与分布式训练最小集:DP / TP / PP / EP、集合通信(all-reduce / all-gather / all-to-all / reduce-scatter)、梯度同步与 ZeRO/FSDP 分片**。
   - 来源:Lecture 04 P19(expert parallel)、P44-P46(MoE 并行 / 块稀疏 GEMM / LatentMoE),以及后续 Lecture 07-08(仓库里 `lecture_07.py` 的 "building blocks of distributed communication/computation" + "distributed training"、`lecture_08.pdf` 的 "Parallelism basics");答疑时发现这是“能看懂图、但说不清机制”的典型缺口。
-  - 建议资源(按顺序):本课程 L05(GPUs) → L06 → L07 → L08;The Ultra-Scale Playbook(HuggingFace nanotron);How to Scale Your Model(jax-ml);Lil'Log《How to Train Really Large Models on Many GPUs?》;论文 Megatron-LM(1909.08053)/ GPipe(1811.06965)/ ZeRO(1910.02054)/ GShard(2006.16668,EP 与 all-to-all 的源头)。详细链接清单 + DeepSeek/Megatron 真实源码摘录见 `lecture_04.md` 的 Q11 追问与附录 ✓
+  - 建议资源(按顺序):本课程 L05(GPUs) → L06 → L07 → L08;The Ultra-Scale Playbook(HuggingFace nanotron);How to Scale Your Model(jax-ml);Lil'Log《How to Train Really Large Models on Many GPUs?》;论文 Megatron-LM(1909.08053)/ GPipe(1811.06965)/ ZeRO(1910.02054)/ GShard(2006.16668,EP 与 all-to-all 的源头)。详细链接清单 + DeepSeek/Megatron 真实源码摘录见 `lecture_04.md` 的 Q11 追问与附录
 
 - **随机梯度噪声与 critical batch:noise scale = trΣ/‖G‖²、双曲线模型与 batch 选择**。
   - 来源:Lecture 09 P37–P39(critical batch、$B_{\mathrm{crit}}=E_{\min}/S_{\min}$、$B_{\mathrm{crit}}$ 随 loss 的幂律)。
@@ -75,6 +75,12 @@
 - **计算最优 vs 部署最优:训练 FLOPs 与推理 FLOPs 的联合成本模型(over-train)**。
   - 来源:Lecture 09 P45–P54(Chinchilla 的 20 tokens/param 与 Llama 3 的 215 tokens/param 的差别)。
   - 建议资源:Chinchilla §4 + 近年 over-training scaling law 的工作;自己写一个 $C_{\mathrm{tot}}=6ND+2NU$ 的小脚本,看 $U$ 变大时最优 $N$ 如何左移。
+- **WSD 学习率 schedule(warmup-stable-decay)与 scaling 分析的耦合**。
+  - 来源:Lecture 11 P13–P16(MiniCPM 用 WSD 把 Chinchilla 拟合成本从 $n^2$ 压回 $n$)、P21–P22(DeepSeek 的两段 10% decay)。
+  - 建议资源:Hägele et al. 2024《Scaling Laws and Compute-Optimal Training Beyond Fixed Training Durations》;MiniCPM(arXiv 2404.06395)§3;自己实现一个 WSD,验证"stable 阶段同一 checkpoint 做不同长度 decay"能省多少。
+- **muon / 矩阵正交化优化器(Newton–Schulz 近似 $USV^{\top}\to UV^{\top}$)与优化器 scaling**。
+  - 来源:Lecture 11 P42–P43(muon 的动机、NanoGPT speedrun、Kimi K2 的 scaling 证据)。
+  - 建议资源:Keller Jordan 的 muon 博客;Kimi K2 技术报告;重点搞清"为什么对矩阵参数做正交化能改善条件数",以及"优化器层面的 scale 依赖如何测量"(P38–P41)。
 ## C 放弃 / 降级
 
 (空)
