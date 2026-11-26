@@ -1,0 +1,23 @@
+notes/lecture_11.md
+  s_21d74b23bf1496::t_86abaa67ffd601 93
+  s_21d74b23bf1496::t_8107893b39c704 42-58
+  s_21d74b23bf1496::t_25f9c4d0288766 21-36
+  s_21d74b23bf1496::t_2fa5a662998c19 8-11,76-83,94-95,99-102,113-114,122-123
+  s_21d74b23bf1496::t_db2408cb3015bd 3-5,7,13-20,38-41,60,63-64,67,69,73-74,85-91,97,104-111,116-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "e98f802a1226b3d7f0b4bccb90b71d9b0aa29df6",
+  "prompts": {},
+  "sessions": {
+    "s_21d74b23bf1496": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_kt1kocavo829",
+        "model": "DeepSeek-V4.1-Flash"
+      },
+      "human_author": "wengla <wengla@trip.com>"
+    }
+  }
+}
